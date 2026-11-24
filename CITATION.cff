@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use LivePTV in published work, please cite it as below, together with the method papers listed in docs/METHODS.md."
+title: "LivePTV: real-time PIV/PTV on iPad with reflection, glare and container-refraction corrections"
+type: software
+authors:
+  - alias: Rhizobium-gits
+version: 0.7.0
+date-released: 2026-11-24
+license: MIT
+repository-code: "https://github.com/Rhizobium-gits/LivePTV"
+keywords:
+  - particle image velocimetry
+  - particle tracking velocimetry
+  - refraction correction
+  - uncertainty quantification
+  - iPad
+  - Swift

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 🐱 Copy to Camera.local.plist (git-ignored) and fill in the values shown on the camera under Settings > Wi-Fi Settings. -->
+<plist version="1.0">
+<dict>
+	<key>SSID</key>
+	<string>Ace Pro 2 XXXXXX.OSC</string>
+	<key>Password</key>
+	<string>camera-wifi-password</string>
+	<key>MACAddress</key>
+	<string>00:00:00:00:00:00</string>
+	<key>Host</key>
+	<string>192.168.42.1</string>
+	<key>Port</key>
+	<integer>6666</integer>
+</dict>
+</plist>

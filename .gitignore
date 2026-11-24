@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+ace-probe-*/
+.DS_Store
+App/Camera.local.plist
+dist/
+*.xcuserstate

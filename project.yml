@@ -1,0 +1,54 @@
+# 🐱 XcodeGen spec for the iPad app. LivePTV.xcodeproj is generated from this: `xcodegen` (brew install xcodegen).
+# 🐱 The analysis package lives in LivePTVKit/ (Xcode cannot use the folder that holds the .xcodeproj as its package).
+# 🐱 Choose your team under Signing & Capabilities before running on a device.
+name: LivePTV
+options:
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  LivePTVKit:
+    path: LivePTVKit
+targets:
+  LivePTV:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes:
+          - Info.plist
+          - LivePTV.entitlements
+          - Camera.local.plist
+          - Camera.example.plist
+      # 🐱 camera Wi-Fi details for auto-connect (optional)
+      - path: App/Camera.local.plist
+        buildPhase: resources
+        optional: true
+    dependencies:
+      - package: LivePTVKit
+        product: LivePTVKit
+    settings:
+      base:
+        # 🐱 random suffix so a free (Personal Team) account does not collide with someone else's identifier
+        PRODUCT_BUNDLE_IDENTIFIER: com.liveptv.ipad.7a83ffda
+        DEVELOPMENT_TEAM: ""
+        TARGETED_DEVICE_FAMILY: "2"
+        INFOPLIST_FILE: App/Info.plist
+        # 🐱 Wi-Fi entitlements (auto-join the camera network) are off so a free Apple ID can sign the app.
+        # 🐱 With a paid account: CODE_SIGN_ENTITLEMENTS: App/LivePTV.entitlements
+        CODE_SIGN_STYLE: Automatic
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        ENABLE_PREVIEWS: YES
+schemes:
+  LivePTV:
+    build:
+      targets:
+        LivePTV: all
+    # 🐱 Release: the analysis needs compiler optimisation for real time
+    run:
+      config: Release
+    profile:
+      config: Release
+    archive:
+      config: Release

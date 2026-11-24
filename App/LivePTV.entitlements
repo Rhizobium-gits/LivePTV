@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 🐱 "Hotspot Configuration": lets the app ask iPadOS to join the camera network (user confirms). -->
+	<key>com.apple.developer.networking.HotspotConfiguration</key>
+	<true/>
+	<!-- 🐱 "Access Wi-Fi Information": lets the app read the current SSID for status display. -->
+	<key>com.apple.developer.networking.wifi-info</key>
+	<true/>
+</dict>
+</plist>

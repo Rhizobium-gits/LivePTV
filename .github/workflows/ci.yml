@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version
+      - name: Build the package as a library (root manifest)
+        run: swift build
+      - name: Tests (algorithms, optics, end-to-end recordings, protocol against a mock camera)
+        working-directory: LivePTVKit
+        run: swift test

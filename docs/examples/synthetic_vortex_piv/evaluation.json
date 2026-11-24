@@ -1,0 +1,83 @@
+{
+  "detection" : {
+    "densityPer10kPx" : 0,
+    "densityPerMM2" : 0,
+    "particlesPerFrameMax" : 0,
+    "particlesPerFrameMean" : 0,
+    "particlesPerFrameMedian" : 0,
+    "particlesPerFrameMin" : 0
+  },
+  "field" : {
+    "cellSizePx" : 16,
+    "cellSizeUm" : 160,
+    "cellsBelow10PercentUncertainty" : 1130,
+    "cellsWithData" : 1131,
+    "columns" : 39,
+    "coveragePercent" : 100,
+    "divergenceMeanAbs" : 0.018558386091845527,
+    "fluctuationRMSMedian" : 0.004803826042426938,
+    "maxSpeedOfMeanField" : 1.002755590119441,
+    "meanSpeedOfMeanField" : 0.5085249192294716,
+    "meanU" : 0.0005885067314661093,
+    "meanV" : -0.00043068157174677143,
+    "relativeUncertaintyMedian" : 0.0011789088129907698,
+    "rows" : 29,
+    "sampleSpeedMedian" : 0.4412787518455759,
+    "sampleSpeedP95" : 0.9517274641053648,
+    "samplesPerValidCellMedian" : 149,
+    "speedUnit" : "mm\/s",
+    "turbulenceIntensityMedian" : 0.010175560731791357,
+    "validCells" : 1131,
+    "vorticityMaxAbs" : 4.799099396510638,
+    "vorticityMeanAbs" : 0.2160421122751997
+  },
+  "generatedAt" : "2026-11-22T14:25:19Z",
+  "measurement" : {
+    "analysisDropPercent" : 0,
+    "analysisDrops" : 0,
+    "analysisFPS" : 174.13612104834513,
+    "cameraTimeS" : 4.966666666666667,
+    "decodeErrors" : 0,
+    "framesAnalyzed" : 150,
+    "measuredFPS" : 30.000000000000107,
+    "missingFramePercent" : 0,
+    "missingFrames" : 0,
+    "receiveToResultMedianMs" : 12.285000004339963,
+    "receiveToResultP95Ms" : 13.33600000361912,
+    "timestampQuality" : {
+      "synthetic" : 150
+    },
+    "wallTimeS" : 0.8556524579908
+  },
+  "method" : "piv",
+  "mmPerPixel" : 0.01,
+  "piv" : {
+    "correlationMedian" : 0.9924927353858948,
+    "fieldsComputed" : 149,
+    "finalWindowPx" : 32,
+    "invalidPercent" : 0.17564784979735223,
+    "pairSpacingFrames" : 1,
+    "passes" : [
+      64,
+      32
+    ],
+    "replacedPercent" : 0.7304814293937182,
+    "validPercent" : 99.09387072080892,
+    "vectorSpacingPx" : 16
+  },
+  "tracking" : {
+    "displacementMedianPx" : 1.4717861914520924,
+    "displacementP99Px" : 3.2985703816255305,
+    "maxDisplacementSettingPx" : 12,
+    "outlierPercent" : 0.7317667619766619,
+    "outlierSamples" : 1231,
+    "trackLengthMedian" : 150,
+    "trackLengthP90" : 150,
+    "tracksFinished" : 1131,
+    "velocitySamples" : 166992
+  },
+  "verdict" : "Good",
+  "warnings" : [
+
+  ]
+}
