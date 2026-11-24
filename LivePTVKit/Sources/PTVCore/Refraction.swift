@@ -484,7 +484,7 @@ public final class RefractionMap: @unchecked Sendable {
         for (i, j, wt) in [(i0, j0, (1 - tx) * (1 - ty)), (i1, j0, tx * (1 - ty)), (i0, j1, (1 - tx) * ty), (i1, j1, tx * ty)] where wt > 0 {
             let c = cells[j * g.columns + i]
             guard c.valid else { continue }
-            let vals = [c.meanU, c.meanV, c.stdU, c.stdV, c.covUV, c.meanSpeed, c.standardErrorU, c.standardErrorV, 0, 0, c.measurementUncertainty ?? 0]
+            let vals: [Double] = [c.meanU, c.meanV, c.stdU, c.stdV, c.covUV, c.meanSpeed, c.standardErrorU, c.standardErrorV, 0, 0, c.measurementUncertainty ?? 0]
             for q in 0..<vals.count { acc[q] += wt * vals[q] }
             if c.measurementUncertainty != nil { sigmaW += wt }
             count += wt * Double(c.count)
