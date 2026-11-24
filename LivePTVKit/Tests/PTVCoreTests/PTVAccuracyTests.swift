@@ -3,7 +3,8 @@ import Testing
 @testable import PTVCore
 
 /// 🐱 Accuracy of detection in conditions where the earlier detector failed: dense images with particles of mixed
-/// 🐱 brightness, and pure noise. Numbers in comments are this code / the code before.
+/// 🐱 brightness, pure noise, and slow Brownian particles under background subtraction. Numbers in comments are this
+/// 🐱 code / the code before.
 
 @Suite struct DetectorAccuracyTests {
     /// 🐱 Unique nearest matching within 1 px: (recall, precision).
@@ -68,5 +69,33 @@ import Testing
                 #expect(total <= 1, "noise \(noise), background \(background): \(total) detections in 3 frames")
             }
         }
+    }
+
+    /// 🐱 Slow Brownian particles (≈ 0.54 px per axis per frame, images 6.4 px across) with background subtraction on:
+    /// 🐱 the background must not learn the particles, or their centres are pushed along their recent motion and D comes
+    /// 🐱 out too high. Lag-1/lag-2 estimator as used by the session evaluation. Observed D +5 % / +35 % (+4 % with
+    /// 🐱 background subtraction off).
+    @Test func brownianDiffusionWithBackgroundSubtraction() throws {
+        var rng = Synth(state: 13)
+        let w = 320, h = 240, fps = 24.0, dTrue = 3.5
+        let step = (2 * dTrue / fps).squareRoot()
+        var pts = (0..<200).map { _ in (10 + rng.unit() * Double(w - 20), 10 + rng.unit() * Double(h - 20)) }
+        let detector = ParticleDetector()
+        let tracker = ParticleTracker()
+        let stats = SessionFieldStatistics(grid: GridGeometry(roi: PixelROI(x: 0, y: 0, width: w, height: h), cellSize: 64),
+                                           minSamples: 2)
+        for k in 0..<120 {
+            let img = Synth.render(pts, w: w, h: h, sigma: 1.6, peak: 120, background: 20, noise: 3, rng: &rng)
+            let found = detector.detect(img)
+            let s = tracker.update(particles: found, time: Double(k) / fps, frameIndex: k)
+            stats.add(s.samples, frameIndex: k, nominalInterval: 1 / fps)
+            pts = pts.map { q in
+                func reflect(_ v: Double, _ lo: Double, _ hi: Double) -> Double { v < lo ? 2 * lo - v : (v > hi ? 2 * hi - v : v) }
+                return (reflect(q.0 + 0.8 / fps + step * rng.gauss(), 10, Double(w - 10)),
+                        reflect(q.1 + 0.2 / fps + step * rng.gauss(), 10, Double(h - 10)))
+            }
+        }
+        let d = try #require(stats.diffusion())
+        #expect(abs(d.d - dTrue) / dTrue < 0.08, "D = \(d.d) px²/s (true \(dTrue))")
     }
 }

@@ -30,6 +30,10 @@ public struct DetectorParameters: Codable, Equatable, Sendable {
     /// 🐱 How fast the background follows a brightening pixel (0...1). Darkening is followed at 0.5, so the
     /// 🐱 model tracks the lower envelope of the image and transient particles are not absorbed into it.
     public var backgroundAlpha: Float = 0.02
+    /// 🐱 The background is not updated under detected particles (it would learn slow particles and bias their
+    /// 🐱 positions along their motion), except under detections that have stayed within ±1 px for this many frames:
+    /// 🐱 those are static structures and are learned at `backgroundAlpha`.
+    public var backgroundStaticFrames = 30
     /// 🐱 1-2-1 smoothing before peak search (suppresses single-pixel noise).
     public var smoothing = true
     /// 🐱 Adaptive threshold: background level + k · σ, where level and σ are the median and 1.4826 · MAD of the
@@ -65,12 +69,21 @@ public final class ParticleDetector {
     private var tmp: [Float] = []
     private var histogram: [Int32] = []
     private var nmsCells: [Int32] = []
+    /// 🐱 Background update bookkeeping: pixels stamped with the current frame number are not updated; `anchors` holds,
+    /// 🐱 at the pixel where each current detection was first seen, the number of frames it has stayed there.
+    private var stamp: [UInt32] = []
+    private var frameStamp: UInt32 = 0
+    private var anchors: [UInt16] = []
+    private var anchorList: [Int] = []
 
     public init(parameters: DetectorParameters = DetectorParameters()) { self.parameters = parameters }
 
     public func reset() {
         background = []
         backgroundShape = (0, 0, 0, 0)
+        stamp = []
+        anchors = []
+        anchorList = []
     }
 
     public func detect(_ image: LumaImage) -> [Particle] {
@@ -89,21 +102,16 @@ public final class ParticleDetector {
             background = Self.morphology(image.pixels, w, h, radius: k, erode: p.polarity == .brightOnDark)
             background = Self.morphology(background, w, h, radius: k, erode: p.polarity != .brightOnDark)
             backgroundShape = shape
+            stamp = []
+            anchors = []
+            anchorList = []
         }
         let bright = p.polarity == .brightOnDark
         image.pixels.withUnsafeBufferPointer { src in
             work.withUnsafeMutableBufferPointer { f in
                 if p.backgroundSubtraction {
-                    background.withUnsafeMutableBufferPointer { bg in
-                        let slow = p.backgroundAlpha, fast: Float = 0.5
-                        for i in 0..<n {
-                            let v = src[i]
-                            let d = bright ? v - bg[i] : bg[i] - v
-                            f[i] = d
-                            // 🐱 d > 0: pixel brighter than background in the particle direction (maybe a
-                            // 🐱 particle) → follow slowly; otherwise follow fast.
-                            bg[i] += (d > 0 ? slow : fast) * (v - bg[i])
-                        }
+                    background.withUnsafeBufferPointer { bg in
+                        if bright { for i in 0..<n { f[i] = src[i] - bg[i] } } else { for i in 0..<n { f[i] = bg[i] - src[i] } }
                     }
                 } else {
                     if bright { for i in 0..<n { f[i] = src[i] } } else { for i in 0..<n { f[i] = 255 - src[i] } }
@@ -171,6 +179,8 @@ public final class ParticleDetector {
         keptPeaks.reserveCapacity(min(candidates.count, p.maxParticles))
         var out: [Particle] = []
         out.reserveCapacity(min(candidates.count, p.maxParticles))
+        var footprints: [(i: Int, radius: Int)] = []
+        if p.backgroundSubtraction { footprints.reserveCapacity(out.capacity) }
         work.withUnsafeBufferPointer { f in
             for c in candidates {
                 if out.count >= p.maxParticles { break }
@@ -204,9 +214,84 @@ public final class ParticleDetector {
                 let (ox, oy) = subpixelOffset(f, w, cx, cy, r, level, thr, p.subpixel)
                 out.append(Particle(x: Double(image.originX + cx) + ox, y: Double(image.originY + cy) + oy,
                                     peak: c.v - level, mass: mass, area: area))
+                if p.backgroundSubtraction {
+                    // 🐱 above-threshold radius + 2 px of wing (the wing of a Gaussian image there is < 1 % of its peak)
+                    footprints.append((c.i, max(r, Int((Double(area) / .pi).squareRoot().rounded(.up)) + 2)))
+                }
             }
         }
+        if p.backgroundSubtraction { updateBackground(image, footprints) }
         return out
+    }
+
+    /// 🐱 Running background, updated after detection. Pixels under this frame's particles are left alone: a slowly
+    /// 🐱 moving particle otherwise leaks into the background at the places it has just occupied, and subtracting that
+    /// 🐱 ghost pushes the detected centre forward along its motion (Brownian steps came out ~20 % too long, D +37 %).
+    /// 🐱 Detections that stay within ±1 px of where they were first seen for `backgroundStaticFrames` frames are
+    /// 🐱 static structures (dust, glints, stuck particles) and are learned like any other pixel.
+    private func updateBackground(_ image: LumaImage, _ footprints: [(i: Int, radius: Int)]) {
+        let w = image.width, h = image.height, n = w * h
+        let p = parameters
+        if stamp.count != n { stamp = [UInt32](repeating: 0, count: n); anchors = [UInt16](repeating: 0, count: n); anchorList = [] }
+        frameStamp &+= 1
+        if frameStamp == 0 { for k in 0..<n { stamp[k] = 0 }; frameStamp = 1 }
+        let fs = frameStamp
+        let staticFrames = max(1, p.backgroundStaticFrames)
+
+        // 🐱 Anchors: for each detection, the pixel where it was first seen and for how many consecutive frames it has
+        // 🐱 stayed within ±1 px of it. Read last frame's anchors, then replace them with this frame's.
+        var newAnchors: [(i: Int, count: UInt16)] = []
+        newAnchors.reserveCapacity(footprints.count)
+        let around = [0, -1, 1, -w, w, -w - 1, -w + 1, w - 1, w + 1]
+        anchors.withUnsafeMutableBufferPointer { a in
+            for fp in footprints {
+                var best = -1
+                var bestCount: UInt16 = 0
+                for o in around {
+                    let k = fp.i + o
+                    if k >= 0, k < n, a[k] > bestCount { bestCount = a[k]; best = k }
+                }
+                if best >= 0 {
+                    a[best] = 0   // 🐱 claimed: a second detection cannot continue the same anchor
+                    newAnchors.append((best, bestCount == UInt16.max ? bestCount : bestCount + 1))
+                } else {
+                    newAnchors.append((fp.i, 1))
+                }
+            }
+            for k in anchorList { a[k] = 0 }
+            anchorList.removeAll(keepingCapacity: true)
+            for na in newAnchors where a[na.i] < na.count {
+                a[na.i] = na.count
+                anchorList.append(na.i)
+            }
+        }
+
+        // 🐱 Protect the footprints of moving (non-static) detections.
+        stamp.withUnsafeMutableBufferPointer { s in
+            for (fp, na) in zip(footprints, newAnchors) where Int(na.count) < staticFrames {
+                let cx = fp.i % w, cy = fp.i / w, rr = fp.radius
+                for yy in max(0, cy - rr)...min(h - 1, cy + rr) {
+                    let row = yy * w
+                    for xx in max(0, cx - rr)...min(w - 1, cx + rr) { s[row + xx] = fs }
+                }
+            }
+        }
+
+        let slow = p.backgroundAlpha, fast: Float = 0.5
+        let bright = p.polarity == .brightOnDark
+        image.pixels.withUnsafeBufferPointer { src in
+            background.withUnsafeMutableBufferPointer { bg in
+                stamp.withUnsafeBufferPointer { s in
+                    for i in 0..<n where s[i] != fs {
+                        let v = src[i]
+                        let d = bright ? v - bg[i] : bg[i] - v
+                        // 🐱 d > 0: pixel brighter than background in the particle direction (maybe an undetected
+                        // 🐱 particle) → follow slowly; otherwise follow fast (lower envelope).
+                        bg[i] += (d > 0 ? slow : fast) * (v - bg[i])
+                    }
+                }
+            }
+        }
     }
 
     /// 🐱 Separable square erosion (min) or dilation (max) with edge clamping.
