@@ -1,0 +1,21 @@
+{
+ "features_per_frame": 343.45666666666665,
+ "tracks": 895,
+ "time_locate_s": 9.161352041999976,
+ "time_link_s": 0.234467625000093,
+ "frames": 300,
+ "powerlaw_n": 1.0749990677685672,
+ "powerlaw_A_um2": 1.6428974074394624,
+ "D_powerlaw_um2_s": 0.4107243518598656,
+ "D_linear10_um2_s": 0.4198607546057909,
+ "msd_offset_um2": -0.0366581697526113,
+ "D_michalet_px2_s": 2.8002633252609024,
+ "D_michalet_um2_s": 0.34475387199272417,
+ "loc_sigma_px": 0.0,
+ "SE_diameter_nm_linear": 1020.7727086992171,
+ "SE_diameter_nm_michalet": 1243.1547099911772,
+ "drift_px_total": [
+  19.426027230245563,
+  5.442128866455333
+ ]
+}

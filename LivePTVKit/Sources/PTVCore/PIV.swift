@@ -4,13 +4,14 @@ import Foundation
 /// 🐱 Particle image velocimetry settings (cross-correlation of interrogation windows).
 public struct PIVParameters: Codable, Equatable, Sendable {
     /// 🐱 Interrogation window size per pass (powers of two, decreasing), e.g. [64, 32]: the first pass predicts,
-    /// 🐱 later passes shift their windows by the predicted displacement (multi-pass window offset).
+    /// 🐱 later passes deform both frames by the predicted field (or, without deformation, shift their windows).
     public var windowSizes: [Int] = [64, 32]
     /// 🐱 Overlap of the final pass (0.5 = 50 %): vector spacing = window × (1 − overlap).
     public var overlap = 0.5
-    /// 🐱 Repeat the final pass with its own result as predictor (sub-pixel window shift converges, removing the
-    /// 🐱 peak-locking bias of integer offsets).
-    public var finalIterations = 2
+    /// 🐱 Repeat the final pass with its own result as predictor. With deformation the response to small structures
+    /// 🐱 converges over the iterations (strong vortex: RMS error 0.025 px after 2, 0.023 px after 3); without it the
+    /// 🐱 sub-pixel window shift converges, removing the peak-locking bias of integer offsets.
+    public var finalIterations = 3
     /// 🐱 Correlate frame i with frame i − pairSpacing. Raise it for slow flows (larger displacements per pair),
     /// 🐱 as when a 30 fps video is analysed at 6 fps (pairSpacing 5).
     public var pairSpacing = 1
@@ -49,10 +50,21 @@ public struct PIVParameters: Codable, Equatable, Sendable {
     public var maxMaskedFraction = 0.4
     /// 🐱 Random uncertainty of every final-pass vector from correlation statistics (after Wieneke 2015).
     public var uncertainty = true
-    /// 🐱 Interpolation for the sub-pixel window shift of the final passes (predictor passes always use bilinear).
+    /// 🐱 Interpolation for the sub-pixel window shift or image deformation of the final passes (predictor passes
+    /// 🐱 always use bilinear).
     public var windowInterpolation: WindowInterpolation = .lanczos4
-    /// 🐱 Correlate the 32-px windows on the GPU (Metal) when the device has one that passes its self-check; otherwise,
-    /// 🐱 and for other window sizes, on the CPU. Same vectors either way (GPUCorrelationTests: within 1e-6 px).
+    /// 🐱 Iterative image deformation (Scarano 2002) in every pass after the first: both frames are resampled with the
+    /// 🐱 previous pass's field, frame A at x − d(x)/2 and frame B at x + d(x)/2, so the windows follow velocity
+    /// 🐱 gradients inside them instead of only moving. Off: windows are only shifted (LivePTV ≤ 0.7), whose spatial
+    /// 🐱 response is that of a plain top-hat average over the window. See `ImageDeformation`.
+    public var deformation = true
+    /// 🐱 Filter the predictor before deforming with it (3 × 3 or ≈ 5 × 5 binomial, chosen per vector by how much of its
+    /// 🐱 roughness noise explains), which keeps the iteration stable for structures smaller than a window and limits how
+    /// 🐱 much predictor noise propagates (Schrijer & Scarano 2008). Off: finer detail, about twice the random error.
+    public var predictorSmoothing = true
+    /// 🐱 Correlate (and deform) the 32-px passes on the GPU (Metal) when the device has one that passes its self-check;
+    /// 🐱 otherwise, and for other window sizes, on the CPU. Same vectors either way (GPUCorrelationTests: within 1e-4 px
+    /// 🐱 with deformation, 1e-6 px with window shift).
     public var useGPU = true
 
     public enum WindowInterpolation: String, Codable, CaseIterable, Sendable {
@@ -158,8 +170,9 @@ public struct PIVImage: Sendable {
     }
 }
 
-/// 🐱 FFT cross-correlation PIV with multi-pass window offset, 3-point Gaussian sub-pixel peaks, correlation and
-/// 🐱 normalised-median validation, and median replacement. Windows are processed in parallel.
+/// 🐱 FFT cross-correlation PIV, multi-pass with iterative image deformation (or window offset), 3-point Gaussian
+/// 🐱 sub-pixel peaks, correlation and normalised-median validation, and median replacement. Windows are processed in
+/// 🐱 parallel.
 public final class PIVEngine: @unchecked Sendable {
     public var parameters: PIVParameters
     private var setup: FFTSetup?
@@ -173,6 +186,11 @@ public final class PIVEngine: @unchecked Sendable {
     public init(parameters: PIVParameters = PIVParameters()) { self.parameters = parameters }
 
     deinit { if let s = setup { vDSP_destroy_fftsetup(s) } }
+
+    /// 🐱 Identifies one `compute` call's frames, so the GPU uploads them once for all its passes.
+    private static let tokenLock = NSLock()
+    nonisolated(unsafe) private static var tokenCounter: UInt64 = 0
+    private static func nextToken() -> UInt64 { tokenLock.withLock { tokenCounter &+= 1; return tokenCounter } }
 
     func fftSetup(maxLog2: Int) -> FFTSetup {
         if let s = setup, setupLog2 >= maxLog2 { return s }
@@ -313,6 +331,7 @@ public final class PIVEngine: @unchecked Sendable {
         var passesOnGPU = 0, passesOnCPU = 0
         let gpu = parameters.useGPU ? MetalCorrelator.shared : nil
         let schedule = sizes.dropLast().map { ($0, false) } + Array(repeating: (sizes.last!, true), count: max(1, parameters.finalIterations))
+        let token = Self.nextToken()
         for (pass, (w, final)) in schedule.enumerated() {
             let last = pass == schedule.count - 1
             let step = final ? max(1, Int((Double(w) * (1 - parameters.overlap)).rounded())) : max(1, w / 2)
@@ -320,13 +339,16 @@ public final class PIVEngine: @unchecked Sendable {
             let cols = (W - w) / step + 1, rows = (H - w) / step + 1
             let n = cols * rows
             // 🐱 computed in this image's own pixel units (origin 0); converted to full-frame px at the end
-            var field = PIVField(columns: cols, rows: rows, originX: Double(w) / 2, originY: Double(w) / 2,
+            var field = PIVField(columns: cols, rows: rows, originX: Double(w - 1) / 2, originY: Double(w - 1) / 2,
                                  step: Double(step), windowSize: w, dx: .init(repeating: 0, count: n),
                                  dy: .init(repeating: 0, count: n), dt: dt,
                                  status: .init(repeating: .invalid, count: n), correlation: .init(repeating: 0, count: n))
             let pred = predictor
             let params = parameters
             let kernel: CorrelationWork.SubpixelKernel? = final && params.windowInterpolation == .lanczos4 ? .lanczos4 : nil
+            // 🐱 image deformation: the field both frames are resampled with (the predictor, filtered); windows then sit
+            // 🐱 at their nominal integer positions and the residual is added to this field at the window centre
+            let deformBy: PIVField? = params.deformation ? pred.flatMap { ImageDeformation.predictor(from: $0, smoothing: params.predictorSmoothing) } : nil
             let coverage = maskedImage.coverage(window: w)
             let wantSigma = last && params.uncertainty
             // 🐱 per-window extras of the last pass: σx, σy (px) and correlation-peak width (px, 0 = none)
@@ -335,19 +357,23 @@ public final class PIVEngine: @unchecked Sendable {
             sigX.initialize(repeating: 0, count: n); sigY.initialize(repeating: 0, count: n); widths.initialize(repeating: 0, count: n)
             defer { sigX.deallocate(); sigY.deallocate(); widths.deallocate() }
             let onGPU = gpu.map {
-                Self.gpuPass($0, A, B, W: W, H: H, w: w, step: step, cols: cols, rows: rows, predictor: pred, coverage: coverage,
-                             minCoverage: minCoverage, kernel: kernel, wantSigma: wantSigma, last: last, parameters: params,
-                             field: &field, sigX: sigX, sigY: sigY, widths: widths)
+                Self.gpuPass($0, A, B, W: W, H: H, w: w, step: step, cols: cols, rows: rows, predictor: pred, deformBy: deformBy,
+                             coverage: coverage, minCoverage: minCoverage, kernel: kernel, wantSigma: wantSigma, last: last,
+                             parameters: params, token: token, field: &field, sigX: sigX, sigY: sigY, widths: widths)
             } ?? false
             if onGPU { passesOnGPU += 1 } else { passesOnCPU += 1 }
             if !onGPU {
+                // 🐱 deformed frames (or the frames themselves when only shifting)
+                let srcA = deformBy.map { ImageDeformation.deform(A, width: W, height: H, field: $0, sign: -0.5, lanczos: kernel != nil) } ?? A
+                let srcB = deformBy.map { ImageDeformation.deform(B, width: W, height: H, field: $0, sign: 0.5, lanczos: kernel != nil) } ?? B
+                let deformGrid = deformBy.map { ImageDeformation.Grid($0) }
                 field.dx.withUnsafeMutableBufferPointer { DX in
                     field.dy.withUnsafeMutableBufferPointer { DY in
                         field.status.withUnsafeMutableBufferPointer { ST in
                             field.correlation.withUnsafeMutableBufferPointer { CO in
                                 let dxp = DX.baseAddress!, dyp = DY.baseAddress!, stp = ST.baseAddress!, cop = CO.baseAddress!
-                                A.withUnsafeBufferPointer { Ap in
-                                    B.withUnsafeBufferPointer { Bp in
+                                srcA.withUnsafeBufferPointer { Ap in
+                                    srcB.withUnsafeBufferPointer { Bp in
                                         DispatchQueue.concurrentPerform(iterations: rows) { j in
                                             var work = CorrelationWork(size: w)
                                             var i = -1
@@ -360,18 +386,28 @@ public final class PIVEngine: @unchecked Sendable {
                                                     if cv[ci] < minCoverage { stp[k] = .masked; continue }
                                                 }
                                                 // 🐱 window centre relative to the ROI
-                                                let cx = Double(i * step) + Double(w) / 2, cy = Double(j * step) + Double(w) / 2
+                                                let cx = Double(i * step) + Double(w - 1) / 2, cy = Double(j * step) + Double(w - 1) / 2
                                                 var sx = 0.0, sy = 0.0
-                                                if let p = pred {
+                                                if let g = deformGrid {
+                                                    // 🐱 the predictor as the deformation interpolated it at the window centre
+                                                    let d = g.value(x: cx, y: cy)
+                                                    sx = d.dx; sy = d.dy
+                                                } else if let p = pred {
                                                     let d = p.interpolate(x: cx, y: cy)
                                                     sx = d.dx; sy = d.dy
                                                 }
-                                                // 🐱 symmetric sub-pixel offset: A moves back half the predicted shift, B forward the rest;
-                                                // 🐱 near the edges the pair slides inward (same shift) so both windows stay inside the image
-                                                guard let ax = Self.place(Double(i * step) - sx / 2, shift: sx, window: w, size: W),
-                                                      let ay = Self.place(Double(j * step) - sy / 2, shift: sy, window: w, size: H) else { continue }
-                                                work.fill(Ap.baseAddress!, W, x0: ax, y0: ay, into: true, kernel: kernel, height: H)
-                                                work.fill(Bp.baseAddress!, W, x0: ax + sx, y0: ay + sy, into: false, kernel: kernel, height: H)
+                                                if deformGrid != nil {
+                                                    // 🐱 deformed frames: both windows at the nominal position, integer copies
+                                                    work.fill(Ap.baseAddress!, W, x0: Double(i * step), y0: Double(j * step), into: true, height: H)
+                                                    work.fill(Bp.baseAddress!, W, x0: Double(i * step), y0: Double(j * step), into: false, height: H)
+                                                } else {
+                                                    // 🐱 symmetric sub-pixel offset: A moves back half the predicted shift, B forward the rest;
+                                                    // 🐱 at an edge the pair moves inward only as far as it must to fit
+                                                    guard let ax = Self.place(Double(i * step) - sx / 2, shift: sx, window: w, size: W),
+                                                          let ay = Self.place(Double(j * step) - sy / 2, shift: sy, window: w, size: H) else { continue }
+                                                    work.fill(Ap.baseAddress!, W, x0: ax, y0: ay, into: true, kernel: kernel, height: H)
+                                                    work.fill(Bp.baseAddress!, W, x0: ax + sx, y0: ay + sy, into: false, kernel: kernel, height: H)
+                                                }
                                                 // 🐱 statistics of the aligned windows, before the FFT reuses them as scratch
                                                 let sigma = wantSigma ? work.uncertainty() : nil
                                                 guard let r = work.correlate(setup: setup, minContrast: params.minWindowContrast) else { continue }
@@ -423,10 +459,13 @@ public final class PIVEngine: @unchecked Sendable {
     /// 🐱 finds the peak, and the CPU finishes the sub-pixel fit with the same code as the CPU pass. False (field
     /// 🐱 untouched) when this pass cannot run on the GPU; the caller then runs it on the CPU.
     static func gpuPass(_ gpu: MetalCorrelator, _ A: [Float], _ B: [Float], W: Int, H: Int, w: Int, step: Int, cols: Int, rows: Int,
-                        predictor pred: PIVField?, coverage: [Float]?, minCoverage: Float, kernel: CorrelationWork.SubpixelKernel?,
-                        wantSigma: Bool, last: Bool, parameters params: PIVParameters, field: inout PIVField,
+                        predictor pred: PIVField?, deformBy: PIVField?, coverage: [Float]?, minCoverage: Float,
+                        kernel: CorrelationWork.SubpixelKernel?, wantSigma: Bool, last: Bool, parameters params: PIVParameters,
+                        token: UInt64, field: inout PIVField,
                         sigX: UnsafeMutablePointer<Float>, sigY: UnsafeMutablePointer<Float>, widths: UnsafeMutablePointer<Float>) -> Bool {
         guard w == MetalCorrelator.windowSize, kernel == nil || kernel == .lanczos4 else { return false }
+        if deformBy != nil && !gpu.supportsDeformation { return false }
+        let deformGrid = deformBy.map { ImageDeformation.Grid($0) }
         let n = cols * rows
         var windows: [GPUWindow] = []
         var grid: [Int] = []
@@ -441,25 +480,35 @@ public final class PIVEngine: @unchecked Sendable {
                 let ci = min(H - 1, j * step + w / 2) * W + min(W - 1, i * step + w / 2)
                 if cv[ci] < minCoverage { masked.append(k); continue }
             }
-            let cx = Double(i * step) + Double(w) / 2, cy = Double(j * step) + Double(w) / 2
+            let cx = Double(i * step) + Double(w - 1) / 2, cy = Double(j * step) + Double(w - 1) / 2
             var sx = 0.0, sy = 0.0
-            if let p = pred {
+            if let g = deformGrid {
+                let d = g.value(x: cx, y: cy)
+                sx = d.dx; sy = d.dy
+            } else if let p = pred {
                 let d = p.interpolate(x: cx, y: cy)
                 sx = d.dx; sy = d.dy
             }
-            guard let ax = place(Double(i * step) - sx / 2, shift: sx, window: w, size: W),
-                  let ay = place(Double(j * step) - sy / 2, shift: sy, window: w, size: H) else { continue }
-            let fa = CorrelationWork.fillPlan(x0: ax, y0: ay, n: w, width: W, height: H, kernel: kernel)
-            let fb = CorrelationWork.fillPlan(x0: ax + sx, y0: ay + sy, n: w, width: W, height: H, kernel: kernel)
-            windows.append(GPUWindow(ax: Int32(fa.ix), ay: Int32(fa.iy), bx: Int32(fb.ix), by: Int32(fb.iy),
-                                     fax: fa.fx, fay: fa.fy, fbx: fb.fx, fby: fb.fy, tapsA: Int32(fa.taps), tapsB: Int32(fb.taps)))
+            if deformGrid != nil {
+                // 🐱 the GPU deforms both frames; windows are integer copies at their nominal positions
+                let x0 = Int32(i * step), y0 = Int32(j * step)
+                windows.append(GPUWindow(ax: x0, ay: y0, bx: x0, by: y0, fax: 0, fay: 0, fbx: 0, fby: 0, tapsA: 1, tapsB: 1))
+            } else {
+                guard let ax = place(Double(i * step) - sx / 2, shift: sx, window: w, size: W),
+                      let ay = place(Double(j * step) - sy / 2, shift: sy, window: w, size: H) else { continue }
+                let fa = CorrelationWork.fillPlan(x0: ax, y0: ay, n: w, width: W, height: H, kernel: kernel)
+                let fb = CorrelationWork.fillPlan(x0: ax + sx, y0: ay + sy, n: w, width: W, height: H, kernel: kernel)
+                windows.append(GPUWindow(ax: Int32(fa.ix), ay: Int32(fa.iy), bx: Int32(fb.ix), by: Int32(fb.iy),
+                                         fax: fa.fx, fay: fa.fy, fbx: fb.fx, fby: fb.fy, tapsA: Int32(fa.taps), tapsB: Int32(fb.taps)))
+            }
             grid.append(k)
             shifts.append(sx); shifts.append(sy)
         }
         let out: [GPUWindowResult]? = A.withUnsafeBufferPointer { Ap in
             B.withUnsafeBufferPointer { Bp in
                 windows.withUnsafeBufferPointer { Wp in
-                    gpu.correlate(a: Ap, b: Bp, width: W, height: H, windows: Wp, minContrast: params.minWindowContrast, uncertainty: wantSigma)
+                    gpu.correlate(a: Ap, b: Bp, width: W, height: H, windows: Wp, minContrast: params.minWindowContrast, uncertainty: wantSigma,
+                                  deformation: deformBy.map { GPUDeformation($0, lanczos: kernel != nil) }, imageToken: token)
                 }
             }
         }
@@ -503,8 +552,8 @@ public final class PIVEngine: @unchecked Sendable {
                     // 🐱 full-frame → analysed px
                     let cx = (f.x(k) - Double(a.originX) + 0.5) / s - 0.5, cy = (f.y(k) - Double(a.originY) + 0.5) / s - 0.5
                     let sx = f.dx[k] / s, sy = f.dy[k] / s
-                    guard let ax = Self.place(cx - Double(w) / 2 - sx / 2, shift: sx, window: w, size: a.width),
-                          let ay = Self.place(cy - Double(w) / 2 - sy / 2, shift: sy, window: w, size: a.height) else { continue }
+                    guard let ax = Self.place(cx - Double(w - 1) / 2 - sx / 2, shift: sx, window: w, size: a.width),
+                          let ay = Self.place(cy - Double(w - 1) / 2 - sy / 2, shift: sy, window: w, size: a.height) else { continue }
                     work.fill(Ap.baseAddress!, a.width, x0: ax, y0: ay, into: true, kernel: .lanczos4, height: a.height)
                     work.fill(Bp.baseAddress!, a.width, x0: ax + sx, y0: ay + sy, into: false, kernel: .lanczos4, height: a.height)
                     guard let r = work.correlate(setup: setup, minContrast: parameters.minWindowContrast),
@@ -576,12 +625,15 @@ public final class PIVEngine: @unchecked Sendable {
     /// 🐱 Interrogation window sizes actually used (powers of two, 8...256).
     static func effectiveWindow(_ w: Int) -> Int { 1 << Int(log2(Double(max(8, min(256, w)))).rounded()) }
 
-    /// 🐱 Start of window A such that A and B = A + shift both fit, with the 3-px / 4-px margins the 8-tap interpolation
-    /// 🐱 needs before / after the window; nil if impossible.
+    /// 🐱 Start of window A such that A and B = A + shift both fit inside the image; nil if impossible. Only the
+    /// 🐱 bilinear footprint (the window plus one pixel after it) has to fit: where the 8-tap kernel would read outside
+    /// 🐱 the image, `fill` (and the GPU plan) fall back to bilinear for that window. A window moves only when it really
+    /// 🐱 cannot be placed at its position, so edge vectors are measured where they are reported (they used to be
+    /// 🐱 measured 3–5 px further in).
     static func place(_ start: Double, shift: Double, window w: Int, size: Int) -> Double? {
-        // 🐱 1e-6 keeps floor(start + shift) ≥ 3 when rounding lands a hair below the bound
-        let span = Double(size - w - 5)
-        let lo = max(3, 3 - shift) + 1e-6, hi = min(span, span - shift) - 1e-6
+        // 🐱 1e-6 keeps floor(start + shift) ≥ 0 when rounding lands a hair below the bound
+        let span = Double(size - w - 1)
+        let lo = max(0, -shift) + 1e-6, hi = min(span, span - shift) - 1e-6
         guard lo <= hi else { return nil }
         return min(max(start, lo), hi)
     }

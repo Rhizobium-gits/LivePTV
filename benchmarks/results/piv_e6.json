@@ -1,0 +1,44 @@
+{
+ "1280x720": {
+  "LivePTV (GPU 32-px passes)": {
+   "ms_median": 17.180708,
+   "vectors": 3476,
+   "device": "GPU (Apple M4) + CPU"
+  },
+  "LivePTV (CPU only)": {
+   "ms_median": 27.3131665,
+   "vectors": 3476,
+   "device": "CPU"
+  },
+  "LivePTV (CPU, bilinear, no uncertainty)": {
+   "ms_median": 20.67725,
+   "vectors": 3476,
+   "device": "CPU"
+  },
+  "OpenPIV windef (Python, 1 process)": {
+   "ms_median": 910.1545214998623,
+   "vectors": 3476
+  }
+ },
+ "1920x1080": {
+  "LivePTV (GPU 32-px passes)": {
+   "ms_median": 38.754228499999996,
+   "vectors": 7854,
+   "device": "GPU (Apple M4) + CPU"
+  },
+  "LivePTV (CPU only)": {
+   "ms_median": 66.961583,
+   "vectors": 7854,
+   "device": "CPU"
+  },
+  "LivePTV (CPU, bilinear, no uncertainty)": {
+   "ms_median": 49.295771,
+   "vectors": 7854,
+   "device": "CPU"
+  },
+  "OpenPIV windef (Python, 1 process)": {
+   "ms_median": 2083.567666500585,
+   "vectors": 7854
+  }
+ }
+}

@@ -1,0 +1,8 @@
+numpy
+scipy
+scikit-image
+pandas
+matplotlib
+pillow
+openpiv==0.26.3
+trackpy==0.7

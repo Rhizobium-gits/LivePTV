@@ -83,12 +83,14 @@ import Testing
         let st = suppressor.lastStatistics
         print(String(format: "REFLECTION uncorrected: rms %.3f px, %.1f %% of valid vectors off by > 0.5 px (%d valid) | corrected: rms %.3f px, %.1f %% off (%d valid, %d masked) | masked image %.1f %% (glare %.1f, glints %.1f)",
                      a.rms, a.bad * 100, a.valid, b.rms, b.bad * 100, b.valid, b.masked, st.maskedPercent, st.glarePercent, st.saturatedPercent))
-        // 🐱 measured: uncorrected rms 0.158 px with 1.8 % of the valid vectors off by > 0.5 px (the median test already
-        // 🐱 removes the worst); corrected rms 0.024 px, none off, 12 % of the image masked (glare 11.7 %, glint 1.4 %)
+        // 🐱 measured (0.8, image deformation): uncorrected rms 0.170 px with 2.2 % of the valid vectors off by > 0.5 px
+        // 🐱 (the median test already removes the worst); corrected rms 0.030 px, none off, 12 % of the image masked
+        // 🐱 (glare 11.7 %, glint 1.4 %). Window shift (≤ 0.7): 0.158 / 0.024 px. Cells next to the masks must be filled
+        // 🐱 before deforming (ImageDeformation.filledEverywhere): left at 0 they bent the field and gave 0.058 px.
         #expect(a.bad > 0.01)
         #expect(b.bad < 0.002)
-        #expect(b.rms < 0.12)
-        #expect(b.rms < a.rms / 3)
+        #expect(b.rms < 0.04)
+        #expect(b.rms < a.rms / 4)
         #expect(st.glarePercent > 5 && st.saturatedPercent > 0.3)
     }
 

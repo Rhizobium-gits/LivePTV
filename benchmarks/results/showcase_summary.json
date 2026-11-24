@@ -1,0 +1,40 @@
+{
+ "source": "printed by LivePTVKit/Tests/PipelineTests/ShowcaseTests.swift and BottleSceneTests (2026-11-25); relative RMS error of the time-averaged field against the exact flow",
+ "bottle": {
+  "corrected": 0.019,
+  "naive": 0.345
+ },
+ "vortex_pair": 0.0032,
+ "vortex_array": 0.0023,
+ "channel": 0.0081,
+ "faint_ensemble": {
+  "averaged_single_pairs": 0.1176,
+  "ensemble": 0.0735
+ },
+ "camera_shake": {
+  "border_std_px_s": {
+   "uncompensated": 18.66,
+   "automatic": 2.26
+  },
+  "mean_field": {
+   "uncompensated": 0.007,
+   "automatic": 0.0151
+  }
+ },
+ "stand_sway": {
+  "mean_field": {
+   "uncompensated": 0.0094,
+   "automatic": 0.0124
+  }
+ },
+ "brownian_ptv_synthetic": {
+  "D_px2_s": 3.078,
+  "D_true_px2_s": 3.0,
+  "stokes_einstein_nm": 557,
+  "true_nm": 572
+ },
+ "real_brownian": {
+  "D_um2_s": 0.3423,
+  "stokes_einstein_nm_20C": 1252
+ }
+}

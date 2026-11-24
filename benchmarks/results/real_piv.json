@@ -1,0 +1,70 @@
+{
+ "test1": {
+  "title": "OpenPIV test1: dense seeding (511×369)",
+  "size": [
+   369,
+   511
+  ],
+  "vectors_liveptv": 660,
+  "valid_liveptv": 0.9757575757575757,
+  "replaced_openpiv": 0.006060606060606061,
+  "median_diff_px": 0.0655276361200729,
+  "p90_diff_px": 0.16052137896949129,
+  "share_within_0p2px": 0.9507389162561576,
+  "median_speed_px": 5.219682035312046,
+  "ms_liveptv": 5.824875,
+  "device": "GPU (Apple M4) + CPU",
+  "ms_openpiv": 185.44875000009142
+ },
+ "test2": {
+  "title": "OpenPIV test2: plate edge with glare (1008×1012)",
+  "size": [
+   1012,
+   1008
+  ],
+  "vectors_liveptv": 3844,
+  "valid_liveptv": 0.9310613943808532,
+  "replaced_openpiv": 0.03173777315296566,
+  "median_diff_px": 0.049120052491256554,
+  "p90_diff_px": 0.38039361504683755,
+  "share_within_0p2px": 0.8282687482575969,
+  "median_speed_px": 8.108683604636743,
+  "ms_liveptv": 20.094583,
+  "device": "GPU (Apple M4) + CPU",
+  "ms_openpiv": 1031.4217920000601
+ },
+ "test4": {
+  "title": "OpenPIV test4: stirred tank (1720×2304)",
+  "size": [
+   2304,
+   1720
+  ],
+  "vectors_liveptv": 15158,
+  "valid_liveptv": 0.9355455864889827,
+  "replaced_openpiv": 0.039846945507322866,
+  "median_diff_px": 0.02371362164246839,
+  "p90_diff_px": 0.10036436959100829,
+  "share_within_0p2px": 0.9285214225707085,
+  "median_speed_px": 0.25430554039732944,
+  "ms_liveptv": 93.513583,
+  "device": "GPU (Apple M4) + CPU",
+  "ms_openpiv": 4051.262999999949
+ },
+ "test5": {
+  "title": "OpenPIV test5: tank with a glint (1024×1024)",
+  "size": [
+   1024,
+   1024
+  ],
+  "vectors_liveptv": 3969,
+  "valid_liveptv": 0.9730410682791635,
+  "replaced_openpiv": 0.0012597631645250692,
+  "median_diff_px": 0.02135369659667117,
+  "p90_diff_px": 0.10422524536503949,
+  "share_within_0p2px": 0.963579604578564,
+  "median_speed_px": 0.04380011537003252,
+  "ms_liveptv": 21.813,
+  "device": "GPU (Apple M4) + CPU",
+  "ms_openpiv": 1046.3382089999413
+ }
+}

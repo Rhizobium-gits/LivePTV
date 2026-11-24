@@ -190,6 +190,25 @@ enum ReportRenderer {
     }
 
     /// 🐱 A methods paragraph describing exactly what was done, with the numbers of this session (for papers / notes).
+    /// 🐱 One sentence on how camera motion was removed: model(s), and the pivot when one was found.
+    static func cameraMotionSentence(_ e: SessionEvaluation, settings s: AnalysisSettings) -> String {
+        let names = ["translation": "a translation", "similarity": "a similarity transform (shift, rotation, zoom)",
+                     "affine": "an affine transform (adds shear and stretch)", "perspective": "a linearised perspective transform (adds keystone)",
+                     "pivot": "a rotation and zoom about a fixed point"]
+        var t: String
+        if s.shake.model == .auto {
+            let used = (e.cameraMotion?.models ?? [:]).sorted { $0.value > $1.value }.map { "\($0.key) \($0.value)" }.joined(separator: ", ")
+            t = "Camera motion was removed per pair: a translation, similarity, affine or linearised perspective model (or a rotation about the learned pivot), chosen per pair by the Bayesian information criterion among the models the static background could determine, was fitted to windows identified as static background (pairs per model: \(used.isEmpty ? "none" : used))."
+        } else {
+            t = "Camera motion was removed per pair by fitting \(names[s.shake.model.rawValue] ?? "a similarity transform") to windows identified as static background."
+        }
+        if let c = e.cameraMotion, let x = c.pivotXPx, let y = c.pivotYPx, let r2 = c.pivotRSquared {
+            t += String(format: " The motion turned about a point at (%.0f, %.0f) px%@ (rotation and zoom about it explain %.0f %% of the fitted shifts; RMS rotation %.2f mrad per pair).",
+                        x, y, c.pivotInsideFrame == false ? ", outside the image" : "", r2 * 100, c.rotationRMSMrad)
+        }
+        return t
+    }
+
     static func methodsText(_ e: SessionEvaluation, settings s: AnalysisSettings, rectified: Bool) -> String {
         var parts: [String] = []
         let p = s.piv
@@ -210,9 +229,13 @@ enum ReportRenderer {
             if !masks.isEmpty {
                 parts.append("Pixels belonging to " + masks.joined(separator: ", ") + String(format: " were masked (dilated by %d px); interrogation windows more than %.0f %% masked were not evaluated.", rp.maskDilationPx, p.maxMaskedFraction * 100))
             }
-            parts.append(String(format: "Images were normalised by local contrast (box radius %d px). Cross-correlation was computed by FFT in %@ px interrogation windows (multi-pass with symmetric sub-pixel window offset, %@ interpolation of the shifted windows, %d final iterations, %.0f %% overlap), with a 3-point Gaussian peak fit corrected for the window-overlap bias (Westerweel 1997). Vectors with a normalised correlation below %.2f or failing the normalised median test (threshold %.1f, ε = %.2f px; Westerweel & Scarano 2005) were rejected%@.",
+            let interp = p.windowInterpolation == .lanczos4 ? "8-tap Lanczos (windowed-sinc)" : "bilinear"
+            let scheme = p.deformation
+                ? String(format: "multi-pass with iterative image deformation (Scarano 2002): both frames resampled symmetrically by the previous pass's field, interpolated between vectors by cubic convolution%@, with %@ image interpolation", p.predictorSmoothing ? " after a 3 × 3 binomial filter (Schrijer & Scarano 2008)" : "", interp)
+                : String(format: "multi-pass with symmetric sub-pixel window offset, %@ interpolation of the shifted windows", interp)
+            parts.append(String(format: "Images were normalised by local contrast (box radius %d px). Cross-correlation was computed by FFT in %@ px interrogation windows (%@, %d final iterations, %.0f %% overlap), with a 3-point Gaussian peak fit corrected for the window-overlap bias (Westerweel 1997). Vectors with a normalised correlation below %.2f or failing the normalised median test (threshold %.1f, ε = %.2f px; Westerweel & Scarano 2005) were rejected%@.",
                                 p.normalizationRadius, p.windowSizes.map(String.init).joined(separator: "→"),
-                                p.windowInterpolation == .lanczos4 ? "8-tap Lanczos (windowed-sinc)" : "bilinear", p.finalIterations, p.overlap * 100,
+                                scheme, p.finalIterations, p.overlap * 100,
                                 p.minCorrelation, p.validationThreshold, p.validationEpsilonPx, p.replaceInvalid ? " and replaced by the median of their neighbours (excluded from statistics)" : ""))
             if let q = e.piv {
                 var t = String(format: "%.1f %% of the evaluated vectors were valid", q.validPercent)
@@ -224,11 +247,12 @@ enum ReportRenderer {
                 }
                 if let d = q.particleImageDiameterPx { t += String(format: " The particle-image diameter inferred from the correlation-peak width was %.1f px", d) + (q.peakLockingIndex.map { String(format: " (peak-locking index %.2f).", $0) } ?? ".") }
                 parts.append(t)
-                if q.shakeCompensation { parts.append("Camera motion was removed per pair by fitting a similarity transform to windows identified as static background.") }
+                if q.shakeCompensation { parts.append(cameraMotionSentence(e, settings: s)) }
                 if let en = q.ensemble { parts.append("In addition, an ensemble correlation (Meinhart, Wereley & Santiago 2000) averaged the correlation planes of \(en.pairs) pairs.") }
             }
         } else {
             parts.append("Particles were detected and tracked (LivePTV PTV) in \(e.measurement.framesAnalyzed) frames recorded at \(fps).")
+            if e.cameraMotion != nil { parts.append(cameraMotionSentence(e, settings: s) + " The camera motion between the two frames of every particle step was subtracted at the particle's position; it was measured by cross-correlating 64-px windows of the raw frames.") }
         }
         if let c = e.corrections, c.refractionCorrected {
             parts.append("Refraction by the container was corrected by tracing the camera ray of every image point through the wall into the measurement plane (Snell's law in 3-D; \(c.container)). Displacements were mapped end to end, and the time-averaged field was resampled on a regular grid in true plane coordinates\(rectified ? "" : " (not possible for this session)").")
@@ -291,7 +315,7 @@ enum ReportRenderer {
             \(row("Vectors", "valid \(n(q.validPercent, "%.1f")) %, replaced \(n(q.replacedPercent, "%.1f")) %, invalid \(n(q.invalidPercent, "%.1f")) %; median correlation \(n(q.correlationMedian, "%.2f"))"))
             \(row("Fields computed", "\(q.fieldsComputed)"))
             \(q.ensemble.map { en in row("Ensemble correlation", "\(en.pairs) pairs (\(en.pairSpacingFrames) frames apart, \(en.windowPx) px windows): valid \(n(en.validPercent, "%.1f")) %, replaced \(n(en.replacedPercent, "%.1f")) %; median peak ratio \(n(en.medianPeakRatio, "%.2f")), median peak \(n(en.medianPeakCorrelation, "%.2f"))" + (en.differenceFromVectorAverage.map { String(format: "; differs from the vector average by %.1f %% of the typical speed (median)", $0 * 100) } ?? "")) } ?? "")
-            \(row("Camera-shake compensation", q.shakeCompensation ? "on: \(q.shakePairsCorrected) pairs corrected, \(q.shakePairsLearning) learning; shake median \(n(q.shakeMedianPx, "%.2f")) px, p95 \(n(q.shakeP95Px, "%.2f")) px per pair" : "off"))
+            \(row("Camera-shake compensation", q.shakeCompensation ? "on: \(q.shakePairsCorrected) pairs corrected, \(q.shakePairsLearning) learning; shake median \(n(q.shakeMedianPx, "%.2f")) px, p95 \(n(q.shakeP95Px, "%.2f")) px per pair" + (e.cameraMotion.map { " — " + $0.text } ?? "") : "off"))
             \(row("Masked windows", n(q.maskedPercent, "%.1f %%")))
             \(row("Random uncertainty of one vector", "median \(n(q.uncertaintyMedianPx, "%.3f")) px, p95 \(n(q.uncertaintyP95Px, "%.3f")) px per pair (correlation statistics)"))
             \(row("Particle-image diameter", n(q.particleImageDiameterPx, "%.1f px") + (q.peakLockingIndex.map { String(format: "; peak-locking index %.2f", $0) } ?? "")))

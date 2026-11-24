@@ -1,0 +1,10 @@
+{
+ "width": 1920,
+ "height": 1080,
+ "particles": 20000,
+ "LivePTV_ms_per_frame": 52.030792,
+ "LivePTV_detected_per_frame": 17524,
+ "trackpy_ms_per_frame": 487.2433958333507,
+ "trackpy_locate_ms_per_frame": 441.7388958333959,
+ "trackpy_detected_per_frame": 10711.75
+}

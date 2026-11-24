@@ -8,7 +8,7 @@ import Foundation
 /// 🐱 pointer access and arithmetic on concrete types stay fast. These kernels keep the live analysis fast in
 /// 🐱 both builds.
 public enum GridKernels {
-    /// 🐱 Median of `n` (≤ 16) values; sorts `p` in place (insertion sort).
+    /// 🐱 Median of `n` (≤ 24) values; sorts `p` in place (insertion sort).
     @inline(__always)
     public static func median(_ p: UnsafeMutablePointer<Double>, _ n: Int) -> Double {
         var i = 1
@@ -26,17 +26,18 @@ public enum GridKernels {
         return n % 2 == 1 ? p[h] : 0.5 * (p[h - 1] + p[h])
     }
 
-    /// 🐱 Values of the usable 8-neighbours of (i, j) into su/sv; returns how many.
+    /// 🐱 Values of the usable neighbours of (i, j) within `radius` cells (1: the 8-neighbours, 2: the 5 × 5 block)
+    /// 🐱 into su/sv (room for 24 values); returns how many.
     @inline(__always)
     static func gather(_ i: Int, _ j: Int, _ cols: Int, _ rows: Int,
                        _ U: UnsafePointer<Double>, _ V: UnsafePointer<Double>, _ ok: UnsafePointer<UInt8>,
-                       _ su: UnsafeMutablePointer<Double>, _ sv: UnsafeMutablePointer<Double>) -> Int {
+                       _ su: UnsafeMutablePointer<Double>, _ sv: UnsafeMutablePointer<Double>, radius: Int = 1) -> Int {
         var m = 0
-        var jj = j - 1
-        while jj <= j + 1 {
+        var jj = j - radius
+        while jj <= j + radius {
             if jj >= 0 && jj < rows {
-                var ii = i - 1
-                while ii <= i + 1 {
+                var ii = i - radius
+                while ii <= i + radius {
                     if ii >= 0 && ii < cols && (ii != i || jj != j) {
                         let q = jj * cols + ii
                         if ok[q] != 0 {
@@ -55,14 +56,19 @@ public enum GridKernels {
 
     /// 🐱 Normalised median test (Westerweel & Scarano 2005) on a regular grid. Only usable cells are tested and
     /// 🐱 used as neighbours; cells with fewer than three usable neighbours are not tested. Returns 1 for outliers.
+    /// 🐱
+    /// 🐱 Cells on the grid border use the 5 × 5 block instead of the 3 × 3 one. Their 3 × 3 neighbours lie on one
+    /// 🐱 side only: in a plain linear gradient the median then sits one gradient step away while the median residual
+    /// 🐱 is ~0, so a correct border vector is flagged (measured: 58–91 % of an edge row in a shear flow). With two
+    /// 🐱 rings the median residual is again one gradient step and the test passes; a true outlier still fails.
     public static func medianTestOutliers(u: [Double], v: [Double], usable: [UInt8], columns cols: Int, rows: Int,
                                           threshold: Double, epsilon: Double) -> [UInt8] {
         let n = cols * rows
         var out = [UInt8](repeating: 0, count: n)
         guard n > 0, u.count >= n, v.count >= n, usable.count >= n else { return out }
-        let scratch = UnsafeMutablePointer<Double>.allocate(capacity: 32)
+        let scratch = UnsafeMutablePointer<Double>.allocate(capacity: 96)
         defer { scratch.deallocate() }
-        let su = scratch, sv = scratch + 8, ru = scratch + 16, rv = scratch + 24
+        let su = scratch, sv = scratch + 24, ru = scratch + 48, rv = scratch + 72
         u.withUnsafeBufferPointer { ub in
             v.withUnsafeBufferPointer { vb in
                 usable.withUnsafeBufferPointer { okb in
@@ -74,7 +80,8 @@ public enum GridKernels {
                             while i < cols {
                                 let k = j * cols + i
                                 if OK[k] != 0 {
-                                    let m = gather(i, j, cols, rows, U, V, OK, su, sv)
+                                    let border = i == 0 || j == 0 || i == cols - 1 || j == rows - 1
+                                    let m = gather(i, j, cols, rows, U, V, OK, su, sv, radius: border ? 2 : 1)
                                     if m >= 3 {
                                         let mu = median(su, m), mv = median(sv, m)
                                         var t = 0
@@ -99,9 +106,10 @@ public enum GridKernels {
         return out
     }
 
-    /// 🐱 For every target cell with at least three usable neighbours: the neighbours' median (u, v).
-    /// 🐱 `found[k] == 1` where a replacement was computed.
-    public static func neighbourMedians(u: [Double], v: [Double], usable: [UInt8], targets: [UInt8], columns cols: Int, rows: Int)
+    /// 🐱 For every target cell with at least `minNeighbours` (default three) usable neighbours: the neighbours'
+    /// 🐱 median (u, v). `found[k] == 1` where a replacement was computed.
+    public static func neighbourMedians(u: [Double], v: [Double], usable: [UInt8], targets: [UInt8], columns cols: Int, rows: Int,
+                                        minNeighbours: Int = 3)
         -> (u: [Double], v: [Double], found: [UInt8]) {
         let n = cols * rows
         var mu = [Double](repeating: 0, count: n), mv = mu
@@ -126,7 +134,7 @@ public enum GridKernels {
                                             let k = j * cols + i
                                             if T[k] != 0 {
                                                 let m = gather(i, j, cols, rows, U, V, OK, su, sv)
-                                                if m >= 3 {
+                                                if m >= max(1, minNeighbours) {
                                                     MU[k] = median(su, m)
                                                     MV[k] = median(sv, m)
                                                     F[k] = 1

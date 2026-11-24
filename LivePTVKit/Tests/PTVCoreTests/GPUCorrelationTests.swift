@@ -67,10 +67,20 @@ struct GPUCorrelationTests {
         #expect((c.particleImageDiameterPx == nil) == (g.particleImageDiameterPx == nil))
     }
 
-    /// 🐱 Defaults: 64-px predictor pass on the CPU, two 32-px Lanczos passes (the last with uncertainty) on the GPU.
+    /// 🐱 Defaults: 64-px predictor pass on the CPU, three 32-px passes on the GPU, each deforming both frames with the
+    /// 🐱 previous field (Lanczos-4; the last pass with uncertainty). The deformed frames are bit-identical (start-up
+    /// 🐱 self-check); the predictor can differ by ~1e-6 px between the paths, which may move a resampling weight by one
+    /// 🐱 table step (1/4096 px) — hence the 1e-4 px tolerance.
     @Test func defaultPassesMatchTheCPU() throws {
         try compare(PIVParameters(), expectDevice: "GPU (")
         #expect(MetalCorrelator.shared.map { PIVEngine.gpuName == $0.deviceName } == true)
+    }
+
+    /// 🐱 Window shift instead of deformation (≤ 0.7 behaviour): Lanczos-shifted windows on the GPU.
+    @Test func shiftedWindowsMatchTheCPU() throws {
+        var p = PIVParameters()
+        p.deformation = false
+        try compare(p, expectDevice: "GPU (")
     }
 
     /// 🐱 32-px only: the first pass has no predictor (integer windows: plain copy), then bilinear shifts.
@@ -78,6 +88,9 @@ struct GPUCorrelationTests {
         var p = PIVParameters()
         p.windowSizes = [32]
         p.windowInterpolation = .bilinear
+        p.deformation = false
+        try compare(p, expectDevice: "GPU (")
+        p.deformation = true                // 🐱 bilinear deformation
         try compare(p, expectDevice: "GPU (")
     }
 

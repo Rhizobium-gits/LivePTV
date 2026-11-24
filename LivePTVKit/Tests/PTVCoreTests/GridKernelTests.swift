@@ -9,7 +9,7 @@ import Testing
         return s.count % 2 == 1 ? s[s.count / 2] : 0.5 * (s[s.count / 2 - 1] + s[s.count / 2])
     }
 
-    /// 🐱 Reference: the previous implementation of the normalised median test.
+    /// 🐱 Reference: the normalised median test written plainly (3 × 3 neighbours, 5 × 5 on the grid border).
     private func naiveOutliers(_ u: [Double], _ v: [Double], _ ok: [Bool], cols: Int, rows: Int, threshold: Double, eps: Double) -> [Bool] {
         var out = [Bool](repeating: false, count: cols * rows)
         for j in 0..<rows {
@@ -17,8 +17,9 @@ import Testing
                 let k = j * cols + i
                 guard ok[k] else { continue }
                 var nu: [Double] = [], nv: [Double] = []
-                for dj in -1...1 {
-                    for di in -1...1 where !(di == 0 && dj == 0) {
+                let r = (i == 0 || j == 0 || i == cols - 1 || j == rows - 1) ? 2 : 1
+                for dj in -r...r {
+                    for di in -r...r where !(di == 0 && dj == 0) {
                         let ii = i + di, jj = j + dj
                         guard ii >= 0, jj >= 0, ii < cols, jj < rows, ok[jj * cols + ii] else { continue }
                         nu.append(u[jj * cols + ii]); nv.append(v[jj * cols + ii])
@@ -46,6 +47,20 @@ import Testing
         #expect(GridKernels.median(of: [3, 1, 2, 10]) == 2.5)
         #expect(GridKernels.median(of: []) == nil)
         #expect(GridKernels.sorted([3, -1, 2]) == [-1, 2, 3])
+    }
+
+    /// 🐱 A correct border vector in a linear gradient passes (its 3 × 3 neighbours would all lie on one side).
+    @Test func borderVectorsInALinearGradientPass() {
+        let cols = 10, rows = 8, n = cols * rows
+        let u = (0..<n).map { Double($0 / cols) * 0.8 }, v = [Double](repeating: 0, count: n)
+        let out = GridKernels.medianTestOutliers(u: u, v: v, usable: .init(repeating: 1, count: n), columns: cols, rows: rows,
+                                                 threshold: 2, epsilon: 0.1)
+        #expect(!out.contains(1))
+        var w = u
+        w[3] += 3; w[cols * (rows - 1) + 5] -= 3      // 🐱 real outliers, one of them on the border
+        let bad = GridKernels.medianTestOutliers(u: w, v: v, usable: .init(repeating: 1, count: n), columns: cols, rows: rows,
+                                                 threshold: 2, epsilon: 0.1)
+        #expect(bad[3] == 1 && bad[cols * (rows - 1) + 5] == 1)
     }
 
     @Test func medianTestMatchesReference() {

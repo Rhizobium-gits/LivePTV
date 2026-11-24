@@ -4,6 +4,8 @@ import Metal
 // 🐱 GPU (Metal) version of CorrelationWork for 32 × 32 windows: window fill (integer copy, bilinear or Lanczos-4),
 // 🐱 mean / σ, optional Wieneke (2015) uncertainty, normalised cyclic cross-correlation plane by 2-D FFT, and the
 // 🐱 first-index maximum with its four cyclic neighbours. The sub-pixel fit stays on the CPU (double precision).
+// 🐱 Passes with image deformation first resample both frames on the GPU (`deform`, the arithmetic of
+// 🐱 `ImageDeformation.deform`) and then copy integer windows from the deformed frames.
 // 🐱 The shader is compiled from source at run time (no .metallib), so it also works in Swift Playgrounds.
 
 /// 🐱 One window pair (same layout as the shader: 48 bytes).
@@ -12,6 +14,14 @@ struct GPUWindow {
     var fax: Float, fay: Float, fbx: Float, fby: Float  // 🐱 fractions: Float(x0 − floor(x0))
     var tapsA: Int32, tapsB: Int32                      // 🐱 1 = integer copy, 2 = bilinear, 8 = Lanczos-4
     var pad0: Int32 = 0, pad1: Int32 = 0
+}
+
+/// 🐱 Image deformation request: the field both frames are resampled with (see `ImageDeformation`), in the analysed
+/// 🐱 image's own pixel units.
+struct GPUDeformation {
+    let grid: ImageDeformation.Grid
+    let lanczos: Bool
+    init(_ f: PIVField, lanczos: Bool) { grid = ImageDeformation.Grid(f); self.lanczos = lanczos }
 }
 
 /// 🐱 Result per window (32 bytes).
@@ -31,17 +41,34 @@ final class MetalCorrelator: @unchecked Sendable {
     private let queue: MTLCommandQueue
     private let plain: MTLComputePipelineState
     private let withSigma: MTLComputePipelineState
+    /// 🐱 Image deformation kernel; nil if it failed to build or its self-test failed (deformed passes then run on the CPU).
+    private var deformPSO: MTLComputePipelineState?
     private let lock = NSLock()
     private var bufA: MTLBuffer?
     private var bufB: MTLBuffer?
+    private var bufDA: MTLBuffer?
+    private var bufDB: MTLBuffer?
+    private var bufNodes: MTLBuffer?
+    private var bufTable: MTLBuffer?
     private var bufW: MTLBuffer?
     private var bufR: MTLBuffer?
+    /// 🐱 Frames in bufA / bufB: (caller's token, width, height); a token of 0 always uploads.
+    private var uploaded: (token: UInt64, width: Int, height: Int) = (0, 0, 0)
     private var gpuMs: Double = 0
+
+    /// 🐱 Whether passes with image deformation can run here (else the engine deforms and correlates on the CPU).
+    var supportsDeformation: Bool { deformPSO != nil }
 
     private static let threadsPerGroup = 128
 
     /// 🐱 Matches `struct Params` in the shader.
     private struct Params { var width: Int32; var height: Int32; var count: Int32; var minContrast: Float }
+    /// 🐱 Matches `struct DeformParams` in the shader.
+    private struct DeformParams {
+        var width: Int32, height: Int32, cols: Int32, rows: Int32
+        var originX: Float, originY: Float, invStep: Float, sign: Float
+        var lanczos: Int32, pad0: Int32 = 0, pad1: Int32 = 0, pad2: Int32 = 0
+    }
 
     private init?() {
         guard MemoryLayout<GPUWindow>.stride == 48, MemoryLayout<GPUWindowResult>.stride == 32,
@@ -63,6 +90,13 @@ final class MetalCorrelator: @unchecked Sendable {
         self.withSigma = withSigma
         deviceName = device.name
         guard selfTest() else { return nil }
+        let table = ImageDeformation.lanczosTable
+        if let f = library.makeFunction(name: "deform"), let pso = try? device.makeComputePipelineState(function: f),
+           let t = device.makeBuffer(bytes: table, length: table.count * MemoryLayout<Float>.stride, options: .storageModeShared) {
+            deformPSO = pso
+            bufTable = t
+            if !deformSelfTest() { deformPSO = nil }
+        }
     }
 
     private static func pipeline(_ device: MTLDevice, _ library: MTLLibrary, sigma: Bool) -> MTLComputePipelineState? {
@@ -79,25 +113,59 @@ final class MetalCorrelator: @unchecked Sendable {
     var lastGPUMilliseconds: Double { lock.lock(); defer { lock.unlock() }; return gpuMs }
 
     /// 🐱 Correlates every window pair; waits for the GPU. Serialised by a lock (thread-safe). nil on a GPU error.
+    /// 🐱 `deformation`: resample frame A at x − d/2 and frame B at x + d/2 first (same arithmetic as
+    /// 🐱 `ImageDeformation.deform`) and read the windows from the deformed frames. `imageToken` (≠ 0): the frames are
+    /// 🐱 the same as in the previous call with this token, so they are not uploaded again.
     func correlate(a: UnsafeBufferPointer<Float>, b: UnsafeBufferPointer<Float>, width: Int, height: Int,
-                   windows: UnsafeBufferPointer<GPUWindow>, minContrast: Float, uncertainty: Bool) -> [GPUWindowResult]? {
+                   windows: UnsafeBufferPointer<GPUWindow>, minContrast: Float, uncertainty: Bool,
+                   deformation: GPUDeformation? = nil, imageToken: UInt64 = 0) -> [GPUWindowResult]? {
         let count = windows.count, pixels = width * height
         guard width > 0, height > 0, a.count >= pixels, b.count >= pixels, count <= Int(Int32.max),
               let pa = a.baseAddress, let pb = b.baseAddress else { return nil }
         guard count > 0, let pw = windows.baseAddress else { return [] }
         lock.lock(); defer { lock.unlock() }
+        if deformation != nil && deformPSO == nil { return nil }
         let imageBytes = pixels * MemoryLayout<Float>.stride
         guard let bA = Self.buffer(device, &bufA, imageBytes), let bB = Self.buffer(device, &bufB, imageBytes),
               let bW = Self.buffer(device, &bufW, count * MemoryLayout<GPUWindow>.stride),
               let bR = Self.buffer(device, &bufR, count * MemoryLayout<GPUWindowResult>.stride) else { return nil }
-        memcpy(bA.contents(), pa, imageBytes)
-        memcpy(bB.contents(), pb, imageBytes)
+        if imageToken == 0 || uploaded != (imageToken, width, height) {
+            memcpy(bA.contents(), pa, imageBytes)
+            memcpy(bB.contents(), pb, imageBytes)
+            uploaded = (imageToken, width, height)
+        }
         memcpy(bW.contents(), pw, count * MemoryLayout<GPUWindow>.stride)
         var params = Params(width: Int32(width), height: Int32(height), count: Int32(count), minContrast: minContrast)
         guard let cb = queue.makeCommandBuffer(), let enc = cb.makeComputeCommandEncoder() else { return nil }
+        var srcA = bA, srcB = bB
+        if let d = deformation, let pso = deformPSO, let table = bufTable {
+            let g = d.grid, nodes = g.paddedColumns * g.paddedRows
+            guard let dA = Self.buffer(device, &bufDA, imageBytes), let dB = Self.buffer(device, &bufDB, imageBytes),
+                  let bN = Self.buffer(device, &bufNodes, nodes * MemoryLayout<SIMD2<Float>>.stride) else {
+                enc.endEncoding(); return nil
+            }
+            let np = bN.contents().bindMemory(to: SIMD2<Float>.self, capacity: nodes)
+            for k in 0..<nodes { np[k] = SIMD2(g.dx[k], g.dy[k]) }
+            enc.setComputePipelineState(pso)
+            enc.setBuffer(bN, offset: 0, index: 2)
+            enc.setBuffer(table, offset: 0, index: 3)
+            let tg = MTLSize(width: 16, height: 16, depth: 1)
+            let grid = MTLSize(width: (width + 15) / 16, height: (height + 15) / 16, depth: 1)
+            for (src, dst, sign) in [(bA, dA, Float(-0.5)), (bB, dB, Float(0.5))] {
+                var dp = DeformParams(width: Int32(width), height: Int32(height), cols: Int32(g.cols), rows: Int32(g.rows),
+                                      originX: g.originX, originY: g.originY, invStep: g.invStep, sign: sign,
+                                      lanczos: d.lanczos ? 1 : 0)
+                enc.setBuffer(src, offset: 0, index: 0)
+                enc.setBuffer(dst, offset: 0, index: 1)
+                enc.setBytes(&dp, length: MemoryLayout<DeformParams>.stride, index: 4)
+                enc.dispatchThreadgroups(grid, threadsPerThreadgroup: tg)
+            }
+            enc.memoryBarrier(scope: .buffers)
+            srcA = dA; srcB = dB
+        }
         enc.setComputePipelineState(uncertainty ? withSigma : plain)
-        enc.setBuffer(bA, offset: 0, index: 0)
-        enc.setBuffer(bB, offset: 0, index: 1)
+        enc.setBuffer(srcA, offset: 0, index: 0)
+        enc.setBuffer(srcB, offset: 0, index: 1)
         enc.setBuffer(bW, offset: 0, index: 2)
         enc.setBuffer(bR, offset: 0, index: 3)
         enc.setBytes(&params, length: MemoryLayout<Params>.stride, index: 4)
@@ -161,6 +229,51 @@ final class MetalCorrelator: @unchecked Sendable {
             }
             guard let r, r.count == windows.count else { return false }
             for v in r where v.index != expected || !(v.peak > 0.5) { return false }
+        }
+        return true
+    }
+
+    /// 🐱 Deformation on the GPU must give the CPU's frames bit for bit (`ImageDeformation.deform`), for a non-uniform
+    /// 🐱 field, both interpolations and both signs.
+    private func deformSelfTest() -> Bool {
+        let w = 48, h = 40
+        var state: UInt64 = 0x2545_F491_4F6C_DD1D
+        func rnd() -> Float {
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Float(state >> 40) / Float(1 << 24)
+        }
+        let a = (0..<(w * h)).map { _ in 255 * rnd() }
+        let cols = 4, rows = 3
+        let f = PIVField(columns: cols, rows: rows, originX: 7.5, originY: 7.5, step: 12, windowSize: 16,
+                         dx: (0..<(cols * rows)).map { _ in Double(8 * rnd() - 4) },
+                         dy: (0..<(cols * rows)).map { _ in Double(8 * rnd() - 4) }, dt: 1,
+                         status: .init(repeating: .valid, count: cols * rows), correlation: .init(repeating: 1, count: cols * rows))
+        guard let pso = deformPSO, let table = bufTable,
+              let src = device.makeBuffer(bytes: a, length: a.count * 4, options: .storageModeShared),
+              let dst = device.makeBuffer(length: a.count * 4, options: .storageModeShared),
+              let nodes = device.makeBuffer(length: (cols + 2 * ImageDeformation.Grid.pad) * (rows + 2 * ImageDeformation.Grid.pad)
+                                                    * MemoryLayout<SIMD2<Float>>.stride, options: .storageModeShared)
+        else { return false }
+        let g = ImageDeformation.Grid(f)
+        let np = nodes.contents().bindMemory(to: SIMD2<Float>.self, capacity: g.paddedColumns * g.paddedRows)
+        for k in 0..<(g.paddedColumns * g.paddedRows) { np[k] = SIMD2(g.dx[k], g.dy[k]) }
+        for lanczos in [true, false] {
+            for sign in [Float(-0.5), 0.5] {
+                guard let cb = queue.makeCommandBuffer(), let enc = cb.makeComputeCommandEncoder() else { return false }
+                var dp = DeformParams(width: Int32(w), height: Int32(h), cols: Int32(cols), rows: Int32(rows),
+                                      originX: g.originX, originY: g.originY, invStep: g.invStep, sign: sign, lanczos: lanczos ? 1 : 0)
+                enc.setComputePipelineState(pso)
+                enc.setBuffer(src, offset: 0, index: 0); enc.setBuffer(dst, offset: 0, index: 1)
+                enc.setBuffer(nodes, offset: 0, index: 2); enc.setBuffer(table, offset: 0, index: 3)
+                enc.setBytes(&dp, length: MemoryLayout<DeformParams>.stride, index: 4)
+                enc.dispatchThreadgroups(MTLSize(width: (w + 15) / 16, height: (h + 15) / 16, depth: 1),
+                                         threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+                enc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
+                guard cb.status == .completed else { return false }
+                let cpu = ImageDeformation.deform(a, width: w, height: h, field: f, sign: sign, lanczos: lanczos)
+                let gp = dst.contents().bindMemory(to: Float.self, capacity: a.count)
+                for k in 0..<a.count where gp[k] != cpu[k] { return false }
+            }
         }
         return true
     }
@@ -472,6 +585,72 @@ kernel void correlate32(device const float* imgA [[buffer(0)]],
                                    plane[((pr - 1) & 31) * N + pc], plane[((pr + 1) & 31) * N + pc],
                                    sigX, sigY};
     }
+}
+
+// Image deformation (see ImageDeformation.deform, which does the same arithmetic on the CPU): out(x, y) =
+// src(x + sign·d(x, y)), d Keys-cubic between the nodes (clamped), Lanczos-4 weights from the shared 1/4096-px table
+// (or bilinear), reads outside the image clamped to the border pixel. Explicit fma everywhere, in the CPU's order.
+struct DeformParams { int width, height, cols, rows; float originX, originY, invStep, sign; int lanczos, pad0, pad1, pad2; };
+
+// Keys cubic (a = −0.5) nodes and weights along one axis, as ImageDeformation.Grid.axis / cubic.
+#define PAD 4                 // ImageDeformation.Grid.pad: ghost nodes (linear extrapolation) on each side
+static inline void axis_cubic(float i, float origin, float invStep, int nodes, thread int* idx, thread float* w) {
+    const float p = min(max((i - origin) * invStep, float(1 - PAD)), float(nodes + PAD - 3));
+    const float fl = floor(p);
+    const int i0 = int(fl) + PAD;
+    idx[0] = i0 - 1; idx[1] = i0; idx[2] = i0 + 1; idx[3] = i0 + 2;
+    const float t = p - fl, tt = t * t;
+    w[0] = t * fma(t, fma(-0.5f, t, 1.0f), -0.5f);
+    w[1] = fma(tt, fma(1.5f, t, -2.5f), 1.0f);
+    w[2] = t * fma(t, fma(-1.5f, t, 2.0f), 0.5f);
+    w[3] = tt * fma(0.5f, t, -0.5f);
+}
+
+kernel void deform(device const float* src [[buffer(0)]],
+                   device float* dst [[buffer(1)]],
+                   device const float2* nodes [[buffer(2)]],
+                   device const float* table [[buffer(3)]],
+                   constant DeformParams& D [[buffer(4)]],
+                   uint2 gid [[thread_position_in_grid]])
+{
+    const int x = int(gid.x), y = int(gid.y);
+    if (x >= D.width || y >= D.height) return;
+    int cx[4], ry[4];
+    float wx4[4], wy4[4];
+    axis_cubic(float(x), D.originX, D.invStep, D.cols, cx, wx4);
+    axis_cubic(float(y), D.originY, D.invStep, D.rows, ry, wy4);
+    float dxp = 0.0f, dyp = 0.0f;
+    const int pcols = D.cols + 2 * PAD;
+    for (int r = 0; r < 4; r++) {
+        device const float2* b = nodes + ry[r] * pcols;
+        float hx = b[cx[0]].x * wx4[0], hy = b[cx[0]].y * wx4[0];
+        for (int c = 1; c < 4; c++) { hx = fma(b[cx[c]].x, wx4[c], hx); hy = fma(b[cx[c]].y, wx4[c], hy); }
+        dxp = r == 0 ? hx * wy4[0] : fma(hx, wy4[r], dxp);
+        dyp = r == 0 ? hy * wy4[0] : fma(hy, wy4[r], dyp);
+    }
+    const float px = fma(D.sign, dxp, float(x)), py = fma(D.sign, dyp, float(y));
+    const float fxf = floor(px), fyf = floor(py);
+    const int ix = int(fxf), iy = int(fyf);
+    const float fx = px - fxf, fy = py - fyf;
+    const int lastX = D.width - 1, lastY = D.height - 1;
+    float acc = 0.0f;
+    if (D.lanczos != 0) {
+        device const float* wx = table + int(fma(fx, 4096.0f, 0.5f)) * 8;
+        device const float* wy = table + int(fma(fy, 4096.0f, 0.5f)) * 8;
+        for (int r = 0; r < 8; r++) {
+            device const float* row = src + clamp(iy - 3 + r, 0, lastY) * D.width;
+            float h = row[clamp(ix - 3, 0, lastX)] * wx[0];
+            for (int k = 1; k < 8; k++) h = fma(row[clamp(ix - 3 + k, 0, lastX)], wx[k], h);
+            acc = r == 0 ? h * wy[0] : fma(h, wy[r], acc);
+        }
+    } else {
+        const int x0 = clamp(ix, 0, lastX), x1 = clamp(ix + 1, 0, lastX), y0 = clamp(iy, 0, lastY), y1 = clamp(iy + 1, 0, lastY);
+        const float v00 = src[y0 * D.width + x0], v10 = src[y0 * D.width + x1];
+        const float v01 = src[y1 * D.width + x0], v11 = src[y1 * D.width + x1];
+        const float top = fma(v10 - v00, fx, v00), bottom = fma(v11 - v01, fx, v01);
+        acc = fma(bottom - top, fy, top);
+    }
+    dst[y * D.width + x] = acc;
 }
 """#
 }

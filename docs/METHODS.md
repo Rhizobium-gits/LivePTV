@@ -1,6 +1,6 @@
 # LivePTV: methods and computational framework
 
-Version 0.7 (2026-11-24). This document describes every computation between a camera frame and a published number:
+Version 0.8 (unreleased). This document describes every computation between a camera frame and a published number:
 what is computed, why it is done that way, and what the validation shows. All numbers quoted as "measured" come
 from the automated tests in `LivePTVKit/Tests` (`./scripts/test.sh`), which assert them.
 
@@ -57,7 +57,7 @@ flowchart LR
   B --> M[masks: container,<br/>glare, glints, exclusions]
   C --> D[local contrast normalisation]
   M --> D
-  D --> E[multi-pass FFT correlation<br/>Lanczos window shift]
+  D --> E[multi-pass FFT correlation<br/>iterative image deformation]
   E --> F[validation:<br/>correlation, median test]
   F --> G[camera-shake removal<br/>static windows on raw frames]
   G --> H[refraction correction<br/>ray-traced mapping]
@@ -198,21 +198,78 @@ same code as the CPU path. Fast math is off. On the same frames the two paths gi
 6·10⁻⁷ px and uncertainties within 0.01 % (`GPUCorrelationTests`). The window placement, validation and replacement
 are shared.
 
-### 7.2 Multi-pass with symmetric sub-pixel window offset
+### 7.2 Multi-pass with iterative image deformation
 
-The default passes are 64 px then 32 px, with two final iterations; the final pass has 50 % overlap. Each pass
-after the first takes the previous field, interpolated bilinearly at the window centre, as predictor
-$\mathbf{s}_p$. Window A is placed at $\mathbf{x}_c - \mathbf{s}_p/2$ and window B at $\mathbf{x}_c + \mathbf{s}_p/2$.
-The measured displacement is $\mathbf{s}_p + \mathbf{r}$, where $\mathbf{r}$ is the residual peak position. Near
-the image edges, both windows slide inward together.
+The default passes are 64 px, then 32 px three times (`finalIterations` 3); the final passes have 50 % overlap.
+A window covering pixels $x_0 \dots x_0+n-1$ has its centre, and its vector, at $x_0 + (n-1)/2$ (before 0.8 the
+vector was reported at $x_0 + n/2$, 0.5 px off, a bias of 0.5 px × the local gradient).
 
-**Interpolation of the shifted windows.** The final passes use an **8-tap Lanczos (windowed-sinc) kernel**,
+**Deformation (default since 0.8; Scarano 2002).** Each pass after the first takes the previous field as predictor
+$\mathbf{d}_p(\mathbf{x})$ and resamples both frames with it, symmetrically (central difference):
+
+$$
+A'(\mathbf{x}) = A\big(\mathbf{x} - \tfrac12\mathbf{d}_p(\mathbf{x})\big), \qquad B'(\mathbf{x}) = B\big(\mathbf{x} + \tfrac12\mathbf{d}_p(\mathbf{x})\big).
+$$
+
+The windows are then copied from $A'$ and $B'$ at their nominal integer positions and correlated; the residual peak
+$\mathbf{r}$ is added to the predictor at the window centre, $\mathbf{d} = \mathbf{d}_p(\mathbf{x}_c) + \mathbf{r}$.
+Because the windows follow the velocity gradients inside them, the spatial response is no longer that of a top-hat
+average over the window. How the predictor is built matters as much as the deformation itself:
+
+1. **Every cell gets a value.** Masked cells and invalid cells without a replacement are filled with the median of
+   their measured neighbours, ring by ring from the measured cells (`ImageDeformation.filledEverywhere`). Left at 0, a
+   masked cell bent the deformation of its neighbours: RMS error next to a glare stripe 0.046 → 0.117 px over three
+   iterations, 0.050 px after the fix.
+2. **Noise-adaptive filter.** The predictor's noise partly propagates (its centre value is added to a residual
+   measured over the window). Both a 3 × 3 binomial filter $s_1$ and its square $s_2$ (≈ 5 × 5) are computed; where
+   $|s_1 - s_2|$ is within what noise explains (0.3–0.6 $\sigma_n$, $\sigma_n$ the robust spread of the residuals to the
+   neighbour medians) the smoother $s_2$ is used, elsewhere $s_1$. Without any filter, structures near the grid's
+   Nyquist limit are amplified from one iteration to the next (Schrijer & Scarano 2008). The filter can be switched off
+   (*Smooth the predictor*) for finer detail at the price of about twice the random error.
+3. **Cubic interpolation between vectors.** The predictor is interpolated to every pixel by Keys cubic convolution,
+   on a node grid extended by four ghost nodes per side by linear extrapolation. Bilinear interpolation cuts the
+   curvature of the field between nodes, so the deformation removes less than the predictor value at the node and
+   the iteration converges above 1: measured +3 % amplitude at λ = 5 windows, as the model
+   $\mathrm{sinc}(2h/\lambda)/\cos^2(\pi h/\lambda)$ predicts ($h$ = vector spacing). Holding the field constant
+   beyond the outermost window centres (instead of extrapolating) biased edge vectors in a shear flow by ≈ 3 px of
+   position.
+4. **Gate.** If fewer than half of the previous pass's (unmasked) vectors are valid, the pass shifts windows instead
+   of deforming (§ below): resampling both frames with a field that is mostly filler destroyed more correlation than a
+   single window offset (very faint, sparse images; use ensemble correlation there, §12).
+
+The frames are resampled with the 8-tap Lanczos kernel below (bilinear if selected); reads outside the image take the
+border pixel. CPU and GPU do the same arithmetic in the same order, with the Lanczos weights from one table at
+1/4096-px phase steps (≤ 1.2·10⁻⁴ px from the exact phase); the GPU checks at start-up that its deformed frames are
+bit-identical to the CPU's.
+
+Measured (`DeformationTests`, synthetic pairs, 2.6-px particle images):
+
+| Test | Window shift (≤ 0.7) | Deformation |
+| --- | --- | --- |
+| Amplitude of a sinusoid, λ = 64 px = 2 windows | 0.72 (top-hat: 0.64) | 0.84 |
+| Same, λ = 160 px | 0.94 | 1.00 |
+| Lamb–Oseen vortex, core 30 px, 4 px peak: RMS error | 0.104 px | 0.022 px |
+| Uniform flow: RMS error | 0.0059 px | 0.0066 px |
+| 18 faint, difficult image pairs (uniform flow): valid / RMS | 88.5 % / 0.175 px | 87.0 % / 0.189 px |
+
+The last two rows are the price: without gradients to resolve there is nothing to gain, and the predictor's noise
+adds a little. In flows with gradients deformation wins by a factor of 2–5.
+
+**Window shift (option, and the predictor pass).** With *Window deformation* off, and in a pass the gate stops,
+window A is placed at $\mathbf{x}_c - \mathbf{s}_p/2$ and window B at $\mathbf{x}_c + \mathbf{s}_p/2$, with
+$\mathbf{s}_p$ the predictor at the window centre; the measured displacement is $\mathbf{s}_p + \mathbf{r}$. A window
+pair moves inward only as far as it must to fit in the image (before 0.8 edge windows were measured 3–5 px further
+in, at the margins the 8-tap kernel needs, but reported at the edge); where the 8-tap kernel would read outside the
+image, that window is interpolated bilinearly. The response of a shifted window is close to a top-hat average,
+$\mathrm{sinc}(n/\lambda)$.
+
+**Interpolation.** The final passes use an **8-tap Lanczos (windowed-sinc) kernel**,
 
 $$
 L_4(x) = \operatorname{sinc}(x)\,\operatorname{sinc}(x/4),\ |x|<4,
 $$
 
-with weights normalised to sum 1 and applied separably. The predictor passes use bilinear interpolation.
+with weights normalised to sum 1. The predictor passes use bilinear interpolation.
 
 The reason is a systematic error found during this work. Bilinear and Keys bicubic kernels are asymmetric at a
 fractional phase $t$. Windows A and B are sampled at phases $t$ and $1-t$, so their kernels are mirror images. The
@@ -230,9 +287,9 @@ Measured residual of aligned windows (noise-free, 3.2 px particle images, worst 
 | integer offsets only | 0.021–0.06 px (peak-locking pattern) |
 
 On complete PIV of noisy synthetic pairs, the actual error fell from 0.040 px to 0.006 px. The price is that the
-sinc kernel does not smooth noise as bilinear does. On extremely faint images (18 difficult pairs) the RMS error is
-0.177 px instead of 0.151 px and fewer vectors pass, while the bias falls from 0.016 px to 0.003 px. For
-time-averaged fields the bias is what remains, so Lanczos-4 is the default; bilinear can be selected.
+sinc kernel does not smooth noise as bilinear does: on extremely faint images fewer vectors pass, while the bias falls
+from 0.016 px to 0.003 px. For time-averaged fields the bias is what remains, so Lanczos-4 is the default; bilinear can
+be selected.
 
 ### 7.3 Sub-pixel peak
 
@@ -250,12 +307,24 @@ $$
 1. **Correlation threshold.** Peak $C \ge 0.2$. Pure noise in a 32×32 window peaks at about 0.11, so 0.2 is about
    6σ above chance.
 2. **Quarter-window rule.** The residual $|\mathbf{r}|$ must be below $n/4 + 1$.
-3. **Normalised median test** (Westerweel & Scarano 2005) on the 8 neighbours, threshold 2, $\varepsilon = 0.1$ px:
+3. **Normalised median test** (Westerweel & Scarano 2005) on the 8 neighbours (on the grid border the 5 × 5 block,
+   see below), threshold 2, $\varepsilon = 0.1$ px:
    $$ r_0 = \frac{|u_0 - u_m|}{r_m + \varepsilon} > 2 \Rightarrow \text{invalid}, $$
    where $u_m$ is the neighbours' median and $r_m$ the median of their residuals $|u_k - u_m|$.
 4. **Replacement.** Invalid vectors are replaced by the median of their valid neighbours and flagged
    **replaced**. They are drawn, but excluded from all statistics. Masked windows are never replaced; for the next
    pass's predictor only, they are filled with the neighbour median.
+
+**Border vectors.** On the border of the vector grid the 3 × 3 neighbours lie on one side only. In a plain linear
+gradient their median then sits one gradient step away while the median residual is ≈ 0, so a correct border vector
+fails the test: before 0.8, 58–71 % of a correct edge row in a shear flow was replaced (it then sat ≈ 12 px away).
+Border cells therefore use the 5 × 5 block, whose median residual is again one gradient step; a real outlier on the
+border still fails (`GridKernelTests`).
+
+**Known limit.** The test compares a vector with its neighbours, so it cannot tell a real structure that changes sign
+from one vector to the next (wavelengths ≲ 3 vector spacings, i.e. ≲ 1.5 windows) from noise, and replaces some correct
+vectors there. Such structures are at the resolution limit anyway; use a smaller window or a higher threshold if they
+matter.
 
 Status codes in `piv_vectors.csv`: 0 valid, 1 replaced, 2 invalid, 3 masked.
 
@@ -329,23 +398,69 @@ $$ \mathrm{PLI} = \max\!\big(0,\ 2\,P(|f|<\tfrac14) - 1\big), $$
 
 ## 10. Camera-shake compensation
 
-The camera motion of each pair is a similarity transform (shift, small rotation $\theta$, scale $\sigma$) about the
+A camera on a stand does not only shift. A stand sways about its foot, so the picture turns about a point that is
+usually far outside it; a camera that tilts adds keystone; a rolling shutter skews a picture that moves during the
+read-out. The camera motion of each pair is therefore written, to first order, as a linearised homography about the
 grid centre $\mathbf{c}$:
 
-$$ \mathbf{d}(\mathbf{x}) = \mathbf{t} + \sigma(\mathbf{x}-\mathbf{c}) + \theta\,R_{90}(\mathbf{x}-\mathbf{c}). $$
+$$ \mathbf{d}(\mathbf{x}) = \mathbf{t} + \mathbf{L}\,\mathbf{r} - \mathbf{r}\,(\mathbf{k}\cdot\mathbf{r}), \qquad \mathbf{r} = \mathbf{x}-\mathbf{c}, \qquad
+\mathbf{L} = \begin{pmatrix} \sigma + e_x & \theta + g_x \\ -\theta + g_y & \sigma + e_y \end{pmatrix}, $$
 
-It is fitted by least squares to **static windows**, then the fit is redone after rejecting residuals above
-3 robust σ + 0.05 px. A window counts as static when its time-averaged displacement per frame is zero within 3
-standard errors and below 0.15 px/frame. Shake goes back and forth, so its average is zero; a slow steady flow has a
-mean many standard errors from zero. Alternatively, a user-drawn reference area defines the static windows. Only
-the oscillating part is removed: the long-term mean of the fitted motion is not subtracted, so a slow flow can
-never be taken for camera motion.
+with shift $\mathbf{t}$, rotation $\theta$, zoom $\sigma$, stretch $e_{x,y}$, shear $g_{x,y}$ and keystone $\mathbf{k}$.
+A rotation about any point $\mathbf{q}$, inside or outside the frame, is the same rotation about $\mathbf{c}$ plus the
+shift $-\theta R_{90}(\mathbf{q}-\mathbf{c})$.
+
+| Model | Parameters | For |
+| --- | --- | --- |
+| translation | $\mathbf{t}$ (2) | a camera that only shifts |
+| similarity | $\mathbf{t}, \theta, \sigma$ (4) | rotation about any point, distance changes |
+| affine | $+ e_x, e_y, g_x, g_y$ (6) | rolling-shutter skew, an oblique view |
+| perspective | $+ \mathbf{k}$ (8) | a camera tilting on its stand (pitch, yaw) |
+| pivot | $\theta, \sigma$ about the learned point $\mathbf{q}$ (2) | a stand swaying about its foot |
+| **automatic** (default) | chosen per pair | |
+
+**Fit.** The model is fitted by least squares to **static windows**. A first pass with the similarity model rejects
+windows with residuals above 3 robust σ + 0.05 px; the chosen model is fitted, residuals are rejected again, and it is
+refitted. A model is only used if the static windows determine it: the smallest eigenvalue of the column-normalised
+normal matrix must be at least 0.02 (with static windows on one side of the picture only, the affine and perspective
+terms are not determined and are never chosen). In automatic mode the determinable model with the lowest Bayesian
+information criterion, $N\ln(\mathrm{RSS}/N + 10^{-4}) + p\ln N$ ($N$ = 2 × windows, $p$ parameters), is chosen per
+pair; a requested model the background cannot determine falls back to the richest simpler one it can.
+
+**Pivot.** For every pair with a rotation, the shift a rotation and zoom about a point $\mathbf{q}$ would cause is
+$\mathbf{t} = -M(\mathbf{q}-\mathbf{c})$, $M = \begin{pmatrix}\sigma & \theta\\ -\theta & \sigma\end{pmatrix}$. Least squares over
+the session gives $\mathbf{q} = \mathbf{c} - \sum M^\top\mathbf{t} / \sum(\sigma^2+\theta^2)$ and the share $R^2$ of the
+fitted shifts it explains. Once at least 10 pairs moved the frame corners by ≥ 0.05 px RMS and $R^2 \ge 0.8$, the
+point is reported (live status, evaluation, methods paragraph) and the 2-parameter pivot model becomes a candidate.
+It stays well determined when the static background is small or on one side, where the 4-parameter similarity
+extrapolates poorly. Each pair's own turning point, $\mathbf{c} - M^{-1}\mathbf{t}$, is recorded in `frames.csv`.
+
+A window counts as static when its time-averaged displacement per frame is zero within 3 standard errors and below
+0.15 px/frame. Shake goes back and forth, so its average is zero; a slow steady flow has a mean many standard errors
+from zero. Alternatively, a user-drawn reference area defines the static windows. Only the oscillating part is
+removed: the long-term mean of the fitted motion (all parameters) is not subtracted, so a slow flow can never be taken
+for camera motion. The static test itself learns from the fields with the whole motion removed: with only the
+oscillating part removed, static windows show the kept mean as a small steady offset and one by one fail the test
+(before 0.8 the compensation could switch itself off after about 60 pairs on clean images).
+
+**PTV.** The same compensation corrects particle tracking. Each pair of consecutive frames is cross-correlated in
+64-px windows (32 px at half resolution) to find the static windows and the camera motion; the motions are
+accumulated per frame, and every particle step has the camera motion between its two frames subtracted at its
+position (steps across a missed frame included).
 
 **Interaction with background removal.** The running mean also removes the static texture this fit relies on.
 Therefore the static windows are measured again on the **raw** frames, with one Lanczos-shifted pass and the
 current vector as offset. They keep those raw measurements as their vectors.
 
-Measured (vortex with 0.6 px shake and a static border):
+Measured (`CameraMotionTests`, `CameraMotionPipelineTests`; synthetic camera through the full pipeline, steady vortex,
+static border):
+
+| Case | Without | With |
+| --- | --- | --- |
+| Stand swaying about a point 900 px below the picture (0.3 mrad RMS): velocity fluctuation of the static border / of the flow | 13.96 / 5.32 px/s | 1.20 / 1.13 px/s; pivot found at (311, 1357) px, truth (320, 1380) |
+| Same, PTV: RMS error of particle velocities | 10.52 px/s | 3.55 px/s |
+| Rolling-shutter shear + keystone + shift: static border / flow | 4.87 / 3.56 px/s (similarity model) | 1.46 / 0.88 px/s (automatic: perspective) |
+| Pure shift with 0.05-px noise: pairs fitted with affine or perspective | | 0 of 65 (no over-fitting) |
 
 | Background | Rigid-fit residual | Field error |
 | --- | --- | --- |
@@ -468,12 +583,31 @@ learning are excluded.
 
 ## 15. PTV and Brownian diffusion
 
-**Detection.** Background removal (slow lower envelope), 1-2-1 smoothing, adaptive threshold (mean + kσ, at least
-8 grey levels), local maxima with non-maximum suppression, then a 3-point Gaussian sub-pixel fit (centroid as
-fallback). Detections on masked pixels (glare, glints, walls, exclusions) are discarded.
+**Detection.** Background removal (slow lower envelope), 1-2-1 smoothing, a threshold from robust statistics,
+local maxima with non-maximum suppression, then a 3-point Gaussian sub-pixel fit (centroid as fallback). Detections on
+masked pixels (glare, glints, walls, exclusions) are discarded.
 
-**Tracking.** Constant-velocity prediction plus neighbour prediction for new tracks, greedy nearest assignment
-within the search radius, and normalised-median outlier flags against neighbouring samples.
+- *Threshold* $= \max(T_\text{min},\ \ell + k\,\sigma)$, where $\ell$ and $\sigma = 1.4826\,\mathrm{MAD}$ are the median and
+  robust spread of the signed, smoothed foreground (from a 1/16-grey-level histogram, O(n)); $k = 5$, $T_\text{min} = 8$.
+  The mean and standard deviation of the whole image, used before 0.8, grow with the number and brightness of the
+  particles, so the threshold rose with seeding density and lost faint particles; the median and MAD stay at the
+  background and its noise while particles cover less than about a quarter of the image. $k$ was chosen so that no
+  condition of the detection benchmark falls below 0.997 precision and pure noise gives no detections.
+- *Background.* The running background is updated after detection and not under the footprint of this frame's
+  detections (above-threshold radius + 2 px). A slowly moving particle otherwise leaks into the background at the
+  places it has just occupied; subtracting that ghost pushed the detected centre forward along its motion, which made
+  Brownian steps about 20 % too long (D +37 %). Detections that stay within ±1 px for 30 frames are static structures
+  and are learned as before.
+
+**Tracking.** Each established track predicts its next position from its velocity (and from its acceleration while
+its last two accelerations agree). Candidate links lie within $r = (r_p + 0.1\,|\mathbf{v}|\,\Delta t)(1 + n_\text{missed}/2)$,
+$r_p = 4$ px. Tracks and particles are then matched by **global minimum-cost assignment** (cost $|\mathbf{x}-\hat{\mathbf{x}}|^2/r^2$,
+leaving a track unmatched costs 1), solved exactly per connected group of candidates by shortest augmenting paths
+(Hungarian / Jonker–Volgenant); groups larger than 2000 fall back to closest-first. Tracks without a prediction (the
+first frames, new particles) are matched by a **neighbour-consistency vote**: the displacement agreed by most nearby
+unmatched particles wins, rather than the nearest particle. New tracks take the median velocity of their 8 nearest
+established neighbours. Samples are flagged by a normalised median test against neighbouring samples. Before 0.8
+links were made greedily, nearest first, with a fixed 4-px prediction radius.
 
 **Diffusion.** From drift-corrected displacements per cell at lags of one and two frames. With localisation noise
 $\sigma$ (Michalet 2010):
@@ -482,6 +616,19 @@ $$ \operatorname{var}(\Delta_k) = 2Dk\Delta t + 2\sigma^2 \ \Rightarrow\ D = \fr
 
 with a robust guard against mismatches (6 robust σ). The Stokes–Einstein diameter is
 $d_h = k_B T / (3\pi\eta D)$, given when calibrated and $D > 2\,\mathrm{SE}$. Measured: D within 4 % (true 3 px²/s).
+
+Measured (`PTVAccuracyTests`, `AssignmentSolverTests` and the benchmark in `benchmarks/`, against trackpy 0.7):
+
+| Case | LivePTV 0.7 | LivePTV 0.8 | trackpy 0.7 |
+| --- | --- | --- | --- |
+| Detection recall at 0.01 particles/px, 2.5–4 px images | 0.45–0.53 | 0.76–0.89 | 0.77–0.87 (minimum mass tuned) |
+| Detection precision, worst of 12 conditions | 0.990 | 0.997 | 0.983 |
+| Links, 5000 particles, 10 px/frame (1.4 spacings): precision / recall | 0.32 / 0.21 | 0.98 / 0.97 | 0.77 / 0.67 |
+| Brownian D, synthetic, background removal on: lag 1–2 / 10-lag MSD | +37 % / +26 % | +3 % / +4 % | +5 % / +1 % |
+| 1920 × 1080 frame, ~20,000 particles: detect + track | | 52 ms | 0.49 s |
+
+Small particle images (1.5 px) in heavy noise are the exception: recall 0.65 → 0.57 (trackpy 0.58), because the new
+threshold no longer sits low enough to catch them; lower k if they matter.
 
 ## 16. Outputs
 
@@ -506,18 +653,22 @@ and the end-of-measurement evaluation:
 
 | Test (file) | Measured |
 | --- | --- |
-| Bottle scene end to end (`BottleSceneTests`) | 2.4 % vs 33.8 % naive, 34 % of windows masked, median σ 0.016 px |
-| Reflection stripe + hot spot + moving glint, uniform flow (`ReflectionTests`) | RMS 0.158 → 0.024 px; vectors off by > 0.5 px: 1.8 % → 0 % |
+| Bottle scene end to end (`BottleSceneTests`) | 1.9 % vs 34.5 % naive (0.7: 2.4 %), 34 % of windows masked, median σ 0.007 px |
+| Reflection stripe + hot spot + moving glint, uniform flow (`ReflectionTests`) | RMS 0.170 → 0.030 px (0.7, window shift: 0.158 → 0.024 px); vectors off by > 0.5 px: 2.2 % → 0 % |
 | Ray tracer vs closed form (`RefractionTests`) | ≤ 1.2·10⁻⁴ mm; paraxial checks to 4 digits |
 | Uniform flow through a 56 mm bottle, image level (`RefractionTests`) | 0.451 → 0.046 px |
-| Single-vector uncertainty (`UncertaintyTests`) | predicted / actual 0.82–1.10 |
+| Single-vector uncertainty (`UncertaintyTests`) | predicted / actual 0.72–0.90 (0.7, window shift: 0.82–1.10) |
 | Particle-image diameter (`UncertaintyTests`) | within 14 % for 2.8–5.6 px |
 | Window-shift interpolation bias (`WindowShiftInterpolationTests`) | bilinear 0.053 px, Lanczos-4 0.002 px |
 | Container plumbing, scale and magnification (`EvaluationTests.containerCorrectionsEndToEnd`) | ℓ = 0.1 mm/px exact; centre speed within 0.3 % of 45 × 0.7502 |
 | Camera shake (`EvaluationTests`) | slow vortex kept; shake removed; residual 0.069 px with background removal |
+| Camera motion beyond shift (`CameraMotionTests`, `CameraMotionPipelineTests`) | stand sway about a point 900 px below the picture: border fluctuation 13.96 → 1.20 px/s, pivot within 25 px; PTV velocity error 10.52 → 3.55 px/s; shear + keystone: 4.87 → 1.46 px/s vs similarity |
 | Ensemble correlation (`EnsembleTests`, `EvaluationTests`) | 8.5 % vs 11.8 % vector average on faint sparse vortex; 99 % valid |
-| Brownian diffusion (`SessionStatisticsTests`, `EvaluationTests`) | D within 4 % |
-| GPU vs CPU correlation (`GPUCorrelationTests`) | identical statuses; vectors within 6·10⁻⁷ px; σ within 0.01 % |
+| Brownian diffusion (`SessionStatisticsTests`, `EvaluationTests`, `PTVAccuracyTests`) | D within 4 %; with background removal on +5 % (was +35 %) |
+| PTV detection and tracking (`PTVAccuracyTests`, `AssignmentSolverTests`) | dense image recall 1.00 (was 0.44); no detections on pure noise; dense fast flow links 0.97 / 0.96 (was 0.29 / 0.19) |
+| GPU vs CPU correlation (`GPUCorrelationTests`) | identical statuses; vectors within 7·10⁻⁵ px with deformation (deformed frames bit-identical), 6·10⁻⁷ px with window shift; σ within 0.1 % |
+| Image deformation (`DeformationTests`) | sinusoid λ = 2 windows: amplitude 0.72 → 0.84; λ = 5 windows 1.00 (no overshoot); Lamb–Oseen vortex 0.104 → 0.022 px; uniform flow 0.0059 → 0.0066 px |
+| Vector positions and edges (`DeformationTests`, `GridKernelTests`) | position offset 0.5 → < 0.1 px; edge rows in a shear flow: 58–71 % replaced → 0 %, position within 0.3 px |
 
 Speed (Apple M3, 1280×720, PIV 64→32 px, 50 % overlap, release build): 15.1 ms per frame with bilinear shifting
 only; 22.0 ms with Lanczos; 24.3 ms with per-vector uncertainty; 26.6 ms with background removal and masks (38 fps).
@@ -525,6 +676,8 @@ An unoptimised build (as in Swift Playgrounds) takes 76 ms. The app lowers the a
 when the live analysis falls below about 8 fps. With the 32-px passes on the GPU (Apple M4, release build, default
 settings with background removal, masks and uncertainty): 1920×1080 42.0 ms per frame vs 56.1 ms CPU only, 1280×720
 17.0 vs 23.3 ms. The 64-px predictor pass, pre-processing, background removal and masks still run on the CPU.
+With image deformation (0.8, three final iterations; synthetic frames, engine only, Apple M4): 1280×720 17.4 ms per
+pair (window shift 14.9 ms), 1920×1080 38.8 ms (36.1 ms); CPU only 28.9 and 65.1 ms.
 
 ## 18. Limitations and recommendations
 
@@ -544,6 +697,12 @@ settings with background removal, masks and uncertainty): 1920×1080 42.0 ms per
 - **Wall band.** Mirror images of tracers in the wall, and the extreme stretching there, are excluded. The usable
   fluid therefore ends about 1 mm (adjustable) inside the inner wall, and further in apparent pixels, since that
   region is magnified ×3 or more.
+- **Deformation in uniform, faint flows.** Where there are no gradients to resolve, deformation cannot gain and the
+  predictor's noise adds a little (uniform flow 0.0059 → 0.0066 px; 18 faint pairs 0.175 → 0.189 px, valid 88.5 →
+  87.0 %). Below half valid vectors a pass falls back to window shift. *Window deformation* can be switched off.
+- **Uncertainty with deformation.** The correlation-statistics estimate (§8) sees the residual of the last pass only.
+  With deformation, predicted ÷ actual error ranged 0.84–1.48 on the synthetic tests (over-estimated on clean images
+  with gradients, under-estimated by ≈ 15 % on noisy ones), against 0.90–1.21 with window shift.
 - **Uncertainty.** The per-vector estimate covers random error only. Bias from remaining interpolation error,
   unresolved gradients within a window, out-of-plane motion and calibration is not included.
 - **Camera preview.** The live stream from the camera is compressed and lower in quality than its own recording.
@@ -566,6 +725,7 @@ settings with background removal, masks and uncertainty): 1920×1080 42.0 ms per
 - Olsen, M. G., & Adrian, R. J. (2000). Out-of-focus effects on particle image visibility and correlation in microscopic particle image velocimetry. *Experiments in Fluids*, 29, S166–S174.
 - Raffel, M., Willert, C. E., Scarano, F., Kähler, C. J., Wereley, S. T., & Kompenhans, J. (2018). *Particle Image Velocimetry: A Practical Guide* (3rd ed.). Springer.
 - Scarano, F. (2002). Iterative image deformation methods in PIV. *Measurement Science and Technology*, 13, R1–R19.
+- Schrijer, F. F. J., & Scarano, F. (2008). Effect of predictor–corrector filtering on the stability and spatial resolution of iterative PIV interrogation. *Experiments in Fluids*, 45, 927–941. https://doi.org/10.1007/s00348-008-0511-7
 - Thielicke, W., & Stamhuis, E. J. (2014). PIVlab – towards user-friendly, affordable and accurate digital particle image velocimetry in MATLAB. *Journal of Open Research Software*, 2(1), e30.
 - Westerweel, J. (1997). Fundamentals of digital particle image velocimetry. *Measurement Science and Technology*, 8, 1379–1392.
 - Westerweel, J., & Scarano, F. (2005). Universal outlier detection for PIV data. *Experiments in Fluids*, 39, 1096–1100.

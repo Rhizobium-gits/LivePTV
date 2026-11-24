@@ -1,0 +1,314 @@
+[
+ {
+  "N": 2000,
+  "U": 1,
+  "p_ratio": 0.08734640537108554,
+  "search_radius": 4.0,
+  "LivePTV default (12 px, 4 px)": {
+   "precision": 0.9979333297546835,
+   "recall": 0.9981476510067114,
+   "mean_track_len": 14.657383657017222
+  },
+  "LivePTV R-matched": {
+   "precision": 0.9980136894376593,
+   "recall": 0.9981476510067114,
+   "mean_track_len": 14.641288433382138
+  },
+  "trackpy (no predictor)": {
+   "precision": 0.998979920541179,
+   "recall": 0.9990335570469798,
+   "mean_track_len": 14.609203798392988
+  },
+  "trackpy + velocity predictor": {
+   "precision": 0.9993289491343443,
+   "recall": 0.9994630872483221,
+   "mean_track_len": 14.603870025556773
+  }
+ },
+ {
+  "N": 2000,
+  "U": 2,
+  "p_ratio": 0.17469281074217108,
+  "search_radius": 5.0,
+  "LivePTV default (12 px, 4 px)": {
+   "precision": 0.9945763075931694,
+   "recall": 0.994709847203201,
+   "mean_track_len": 14.582573824279985
+  },
+  "LivePTV R-matched": {
+   "precision": 0.9946831364124598,
+   "recall": 0.994709847203201,
+   "mean_track_len": 14.566642388929353
+  },
+  "trackpy (no predictor)": {
+   "precision": 0.9976632376245602,
+   "recall": 0.9974489110878381,
+   "mean_track_len": 14.587892049598834
+  },
+  "trackpy + velocity predictor": {
+   "precision": 0.9993556528042526,
+   "recall": 0.999570342920057,
+   "mean_track_len": 14.566642388929353
+  }
+ },
+ {
+  "N": 2000,
+  "U": 4,
+  "p_ratio": 0.34938562148434216,
+  "search_radius": 8.0,
+  "LivePTV default (12 px, 4 px)": {
+   "precision": 0.9823177952416837,
+   "recall": 0.9805233182892757,
+   "mean_track_len": 14.245014245014245
+  },
+  "LivePTV R-matched": {
+   "precision": 0.9837245021691682,
+   "recall": 0.9807382333978079,
+   "mean_track_len": 14.0597539543058
+  },
+  "trackpy (no predictor)": {
+   "precision": 0.985920043074438,
+   "recall": 0.9838276380829573,
+   "mean_track_len": 14.657383657017222
+  },
+  "trackpy + velocity predictor": {
+   "precision": 0.9972078288184283,
+   "recall": 0.9978239845261122,
+   "mean_track_len": 14.711290915777859
+  }
+ },
+ {
+  "N": 2000,
+  "U": 6,
+  "p_ratio": 0.5240784322265132,
+  "search_radius": 11.0,
+  "LivePTV default (12 px, 4 px)": {
+   "precision": 0.9590786571918647,
+   "recall": 0.9450555346890595,
+   "mean_track_len": 12.586532410320956
+  },
+  "LivePTV R-matched": {
+   "precision": 0.9587715951822987,
+   "recall": 0.9439555722487525,
+   "mean_track_len": 12.503907471084714
+  },
+  "trackpy (no predictor)": {
+   "precision": 0.8794816535587338,
+   "recall": 0.8430273112625423,
+   "mean_track_len": 11.179429849077698
+  },
+  "trackpy + velocity predictor": {
+   "precision": 0.9838944249932668,
+   "recall": 0.980093362665665,
+   "mean_track_len": 14.440433212996389
+  }
+ },
+ {
+  "N": 2000,
+  "U": 8,
+  "p_ratio": 0.6987712429686843,
+  "search_radius": 14.0,
+  "LivePTV default (12 px, 4 px)": {
+   "precision": 0.923352756611385,
+   "recall": 0.8855454056958625,
+   "mean_track_len": 10.175527855507504
+  },
+  "LivePTV R-matched": {
+   "precision": 0.923268364978608,
+   "recall": 0.8870768404083826,
+   "mean_track_len": 10.311936065996392
+  },
+  "trackpy (no predictor)": {
+   "precision": 0.5850170768297743,
+   "recall": 0.492423428264374,
+   "mean_track_len": 6.9025021570319245
+  },
+  "trackpy + velocity predictor": {
+   "precision": 0.9301791837186152,
+   "recall": 0.903788285867813,
+   "mean_track_len": 11.668611435239207
+  }
+ },
+ {
+  "N": 2000,
+  "U": 10,
+  "p_ratio": 0.8734640537108553,
+  "search_radius": 17.0,
+  "LivePTV default (12 px, 4 px)": {
+   "precision": 0.7974297953355545,
+   "recall": 0.6748388829215897,
+   "mean_track_len": 6.270575325286095
+  },
+  "LivePTV R-matched": {
+   "precision": 0.8079081950854434,
+   "recall": 0.695703544575725,
+   "mean_track_len": 6.6115702479338845
+  },
+  "trackpy (no predictor)": {
+   "precision": 0.38767520710266,
+   "recall": 0.2978249194414608,
+   "mean_track_len": 5.752912411908529
+  },
+  "trackpy + velocity predictor": {
+   "precision": 0.8810667879787325,
+   "recall": 0.8321160042964554,
+   "mean_track_len": 10.08827238335435
+  }
+ },
+ {
+  "N": 5000,
+  "U": 1,
+  "p_ratio": 0.13810679320049757,
+  "search_radius": 4.0,
+  "LivePTV default (12 px, 4 px)": {
+   "precision": 0.9954923047202009,
+   "recall": 0.996080284367315,
+   "mean_track_len": 14.827995255041518
+  },
+  "LivePTV R-matched": {
+   "precision": 0.9955884720656899,
+   "recall": 0.996080284367315,
+   "mean_track_len": 14.792899408284024
+  },
+  "trackpy (no predictor)": {
+   "precision": 0.9974767539244529,
+   "recall": 0.9976374316734501,
+   "mean_track_len": 14.723203769140165
+  },
+  "trackpy + velocity predictor": {
+   "precision": 0.9979927438225886,
+   "recall": 0.9984535916408037,
+   "mean_track_len": 14.721036360959811
+  }
+ },
+ {
+  "N": 5000,
+  "U": 2,
+  "p_ratio": 0.27621358640099514,
+  "search_radius": 5.0,
+  "LivePTV default (12 px, 4 px)": {
+   "precision": 0.9863250432038471,
+   "recall": 0.9865474222155418,
+   "mean_track_len": 14.790711433219938
+  },
+  "LivePTV R-matched": {
+   "precision": 0.9869281747779294,
+   "recall": 0.9864937407399454,
+   "mean_track_len": 14.692918013517485
+  },
+  "trackpy (no predictor)": {
+   "precision": 0.9919008335481654,
+   "recall": 0.9914109639045758,
+   "mean_track_len": 14.863258026159334
+  },
+  "trackpy + velocity predictor": {
+   "precision": 0.997392703862661,
+   "recall": 0.9980137854029332,
+   "mean_track_len": 14.795088030773783
+  }
+ },
+ {
+  "N": 5000,
+  "U": 4,
+  "p_ratio": 0.5524271728019903,
+  "search_radius": 8.0,
+  "LivePTV default (12 px, 4 px)": {
+   "precision": 0.95700835346761,
+   "recall": 0.9487336469678417,
+   "mean_track_len": 13.439053890606102
+  },
+  "LivePTV R-matched": {
+   "precision": 0.9588586307909298,
+   "recall": 0.9492599514510967,
+   "mean_track_len": 13.349352556401014
+  },
+  "trackpy (no predictor)": {
+   "precision": 0.8171264367816092,
+   "recall": 0.763571137032502,
+   "mean_track_len": 9.99700089973008
+  },
+  "trackpy + velocity predictor": {
+   "precision": 0.9657343872144533,
+   "recall": 0.9553822689093682,
+   "mean_track_len": 13.37613697164259
+  }
+ },
+ {
+  "N": 5000,
+  "U": 6,
+  "p_ratio": 0.8286407592029854,
+  "search_radius": 11.0,
+  "LivePTV default (12 px, 4 px)": {
+   "precision": 0.8948318183346596,
+   "recall": 0.857861256769535,
+   "mean_track_len": 10.672358591248665
+  },
+  "LivePTV R-matched": {
+   "precision": 0.8954698362861628,
+   "recall": 0.8580976532278862,
+   "mean_track_len": 10.654165778819518
+  },
+  "trackpy (no predictor)": {
+   "precision": 0.45635858523033546,
+   "recall": 0.3547881028109688,
+   "mean_track_len": 5.919962112242482
+  },
+  "trackpy + velocity predictor": {
+   "precision": 0.9021035141458783,
+   "recall": 0.8575818791369381,
+   "mean_track_len": 10.38961038961039
+  }
+ },
+ {
+  "N": 5000,
+  "U": 8,
+  "p_ratio": 1.1048543456039805,
+  "search_radius": 14.0,
+  "LivePTV default (12 px, 4 px)": {
+   "precision": 0.7216914388750454,
+   "recall": 0.6192184965136392,
+   "mean_track_len": 7.244277021153289
+  },
+  "LivePTV R-matched": {
+   "precision": 0.7200395509218118,
+   "recall": 0.6180796544796244,
+   "mean_track_len": 7.247427163357008
+  },
+  "trackpy (no predictor)": {
+   "precision": 0.23246052368578854,
+   "recall": 0.16243540294594797,
+   "mean_track_len": 5.084659582040983
+  },
+  "trackpy + velocity predictor": {
+   "precision": 0.8407382574019833,
+   "recall": 0.7678803571236718,
+   "mean_track_len": 8.662508662508662
+  }
+ },
+ {
+  "N": 5000,
+  "U": 10,
+  "p_ratio": 1.3810679320049757,
+  "search_radius": 17.0,
+  "LivePTV default (12 px, 4 px)": {
+   "precision": 0.3210953856460933,
+   "recall": 0.2059537621932878,
+   "mean_track_len": 4.674426214182209
+  },
+  "LivePTV R-matched": {
+   "precision": 0.3245044116913976,
+   "recall": 0.20979975076275192,
+   "mean_track_len": 4.703890117126864
+  },
+  "trackpy (no predictor)": {
+   "precision": 0.14980937795301247,
+   "recall": 0.09878174552017532,
+   "mean_track_len": 4.78423117405033
+  },
+  "trackpy + velocity predictor": {
+   "precision": 0.7705841043773948,
+   "recall": 0.6719307292338104,
+   "mean_track_len": 7.216048491845865
+  }
+ }
+]
