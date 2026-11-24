@@ -54,9 +54,12 @@ import Testing
         #expect(frames.allSatisfy { $0.width == 160 && $0.height == 120 })
         #expect(source.timestampUnit == .microseconds)
         let locked = frames.filter { $0.timestampQuality == .source }
-        // 🐱 timestamps are comparable only within one timeline segment (a re-anchor under CPU load starts a new one)
+        // 🐱 timestamps are comparable only within one timeline segment (a re-anchor under CPU load starts a new one).
+        // 🐱 The interval is the one the mock sends (33,333 µs, not exactly 1/30 s): measured in 1/30 s, a step over n
+        // 🐱 skipped frames is off by n·1e-5 and failed whenever a slow runner skipped ten or more.
+        let interval = Double(camera.behavior.timestampStep) * 1e-6
         for (a, b) in zip(locked, locked.dropFirst()) where a.segment == b.segment {
-            let steps = (b.presentationTime - a.presentationTime) / (1.0 / 30)
+            let steps = (b.presentationTime - a.presentationTime) / interval
             #expect(steps >= 0.999 && abs(steps - steps.rounded()) < 1e-4)
         }
         #expect(source.cameraInfo?.cameraType == "Insta360 Ace Pro 2 (mock)")
