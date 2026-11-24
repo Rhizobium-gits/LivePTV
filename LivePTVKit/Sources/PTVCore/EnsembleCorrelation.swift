@@ -179,7 +179,7 @@ public final class EnsembleCorrelator: @unchecked Sendable {
                                                           let ay = Self.place(j * st - oy / 2, shift: oy, window: w, size: H) else { continue }
                                                     var sx = 0.0, sy = 0.0
                                                     if let shift {
-                                                        let d = shift(Double(i * st) + Double(w) / 2, Double(j * st) + Double(w) / 2)
+                                                        let d = shift(Double(i * st) + Double(w - 1) / 2, Double(j * st) + Double(w - 1) / 2)
                                                         sx = d.0
                                                         sy = d.1
                                                     }
@@ -316,7 +316,7 @@ public final class EnsembleCorrelator: @unchecked Sendable {
                 k += 1
             }
         }
-        var f = PIVField(columns: cols, rows: rows, originX: Double(w) / 2, originY: Double(w) / 2, step: Double(step), windowSize: w,
+        var f = PIVField(columns: cols, rows: rows, originX: Double(w - 1) / 2, originY: Double(w - 1) / 2, step: Double(step), windowSize: w,
                          dx: dx, dy: dy, dt: dt, status: status, correlation: peakHeight)
         PIVEngine.validate(&f, threshold: p.validationThreshold, epsilon: p.validationEpsilonPx, replace: p.replaceInvalid)
         let image = PIVImage(width: width, height: self.height, originX: originX, originY: originY, scale: scale, pixels: [])

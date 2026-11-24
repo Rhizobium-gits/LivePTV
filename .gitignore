@@ -7,3 +7,4 @@ ace-probe-*/
 App/Camera.local.plist
 dist/
 *.xcuserstate
+.claude/

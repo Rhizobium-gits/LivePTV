@@ -132,7 +132,10 @@ public final class ExperimentRecorder: @unchecked Sendable {
                                         "mean_luma", "threshold", "n_particles", "n_tracks", "n_samples", "analysis_drops_total",
                                         "stream_gap_frames_total", "decode_errors_total", "processing_fps",
                                         "piv_pair_spacing", "piv_scale", "shake_applied", "shake_tx_px", "shake_ty_px", "shake_rotation_mrad",
-                                        "shake_scale_ppm", "shake_background_windows", "shake_residual_px"])
+                                        "shake_scale_ppm", "shake_background_windows", "shake_residual_px", "shake_model",
+                                        "shake_stretch_x_ppm", "shake_stretch_y_ppm", "shake_shear_x_ppm", "shake_shear_y_ppm",
+                                        "shake_keystone_x_per_mpx", "shake_keystone_y_per_mpx", "shake_pivot_x_px", "shake_pivot_y_px",
+                                        "shake_center_x_px", "shake_center_y_px"])
         particles = try csv("particles.csv", ["frame_index", "pts_s", "track_id", "x_px", "y_px", "peak", "mass", "area_px"])
         velocities = try csv("velocities.csv", ["frame_index", "track_id", "t_s", "x_px", "y_px", "dx_px", "dy_px", "dt_s",
                                                 "u_px_s", "v_px_s", "u_mm_s", "v_mm_s", "outlier"])
@@ -214,6 +217,8 @@ public final class ExperimentRecorder: @unchecked Sendable {
         var maskStatistics: MaskStatistics?
         /// 🐱 Fractional parts of the raw valid displacements (analysed px, 20 bins over −0.5…0.5): peak locking.
         var subpixelHistogram: [Int]?
+        /// 🐱 point the camera-motion parameters refer to (grid centre, full-frame px)
+        var shakeCenter: (x: Double, y: Double)? = nil
     }
 
     private var pivVectors: CSVWriter?
@@ -234,7 +239,12 @@ public final class ExperimentRecorder: @unchecked Sendable {
                         r.method == .piv ? String(r.pairSpacing) : "", r.method == .piv ? String(r.pivScale) : "",
                         r.shake.map { $0.applied ? "1" : "0" } ?? "", r.shake.map { f($0.tx, 4) } ?? "", r.shake.map { f($0.ty, 4) } ?? "",
                         r.shake.map { f($0.rotation * 1000, 4) } ?? "", r.shake.map { f($0.scale * 1e6, 1) } ?? "",
-                        r.shake.map { String($0.backgroundWindows) } ?? "", r.shake.map { f($0.residualRMSPx, 4) } ?? ""])
+                        r.shake.map { String($0.backgroundWindows) } ?? "", r.shake.map { f($0.residualRMSPx, 4) } ?? "",
+                        r.shake?.model ?? "", r.shake.map { f($0.stretchX * 1e6, 1) } ?? "", r.shake.map { f($0.stretchY * 1e6, 1) } ?? "",
+                        r.shake.map { f($0.shearX * 1e6, 1) } ?? "", r.shake.map { f($0.shearY * 1e6, 1) } ?? "",
+                        r.shake.map { f($0.keystoneX * 1e6, 3) } ?? "", r.shake.map { f($0.keystoneY * 1e6, 3) } ?? "",
+                        r.shake?.pivotX.map { f($0, 1) } ?? "", r.shake?.pivotY.map { f($0, 1) } ?? "",
+                        r.shakeCenter.map { f($0.x, 1) } ?? "", r.shakeCenter.map { f($0.y, 1) } ?? ""])
             for (k, p) in r.particles.enumerated() {
                 particles.row([String(r.frameIndex), f(r.pts, 6), k < r.trackIDs.count ? String(r.trackIDs[k]) : "",
                                f(p.x, 3), f(p.y, 3), f(Double(p.peak), 1), f(Double(p.mass), 1), String(p.area)])

@@ -47,13 +47,16 @@ public enum EditTarget: Sendable {
 }
 
 public enum SyntheticChoice: String, CaseIterable, Identifiable, Sendable {
-    case vortex = "Vortex", rotation = "Rotation", channel = "Channel flow", uniform = "Uniform"
+    case vortex = "Vortex", vortexPair = "Vortex pair", vortexArray = "Vortex array", rotation = "Rotation"
+    case channel = "Channel flow", uniform = "Uniform"
     case slowShaky = "Slow vortex + camera shake"
     public var id: String { rawValue }
 
     var flow: SyntheticFlow {
         switch self {
         case .vortex: return .lambOseen(circulation: 60_000, coreRadius: 60)
+        case .vortexPair: return .vortexPair(circulation: 50_000, coreRadius: 40, separation: 200)
+        case .vortexArray: return .taylorGreen(uMax: 60, cell: 160)
         case .rotation: return .solidBodyRotation(omega: 0.4)
         case .channel: return .poiseuille(uMax: 120)
         case .uniform: return .uniform(u: 60, v: 20)

@@ -10,6 +10,12 @@ public enum SyntheticFlow: Sendable, Codable, Equatable {
     case lambOseen(circulation: Double, coreRadius: Double)
     /// 🐱 Plane Poiseuille flow along x between y = 0 and y = height.
     case poiseuille(uMax: Double)
+    /// 🐱 Two counter-rotating Lamb–Oseen vortices (a dipole) `separation` px apart along x, about the image centre:
+    /// 🐱 a jet between them, opposite vorticity on either side.
+    case vortexPair(circulation: Double, coreRadius: Double, separation: Double)
+    /// 🐱 Taylor–Green vortex array: u = U sin(πx/L) cos(πy/L), v = −U cos(πx/L) sin(πy/L), cells of size L from the
+    /// 🐱 image's top-left corner, alternating sense of rotation.
+    case taylorGreen(uMax: Double, cell: Double)
 
     public func velocity(x: Double, y: Double, width: Double, height: Double) -> (u: Double, v: Double) {
         let cx = width / 2, cy = height / 2
@@ -28,6 +34,15 @@ public enum SyntheticFlow: Sendable, Codable, Equatable {
         case let .poiseuille(uMax):
             let eta = y / height
             return (4 * uMax * eta * (1 - eta), 0)
+        case let .vortexPair(gamma, rc, sep):
+            var u = 0.0, v = 0.0
+            for (xc, g) in [(cx - sep / 2, gamma), (cx + sep / 2, -gamma)] {
+                let w = SyntheticFlow.lambOseen(circulation: g, coreRadius: rc).velocity(x: x - xc + cx, y: y, width: width, height: height)
+                u += w.u; v += w.v
+            }
+            return (u, v)
+        case let .taylorGreen(uMax, l):
+            return (uMax * sin(.pi * x / l) * cos(.pi * y / l), -uMax * cos(.pi * x / l) * sin(.pi * y / l))
         }
     }
 }
@@ -53,6 +68,15 @@ public final class TestVideoSource: CameraVideoSource, @unchecked Sendable {
         /// 🐱 Simulated camera shake: random per-frame image shift (px, std) and rotation (rad, std) of the whole picture.
         public var shakeStdPx = 0.0
         public var shakeRotationStd = 0.0
+        /// 🐱 Point the rotation turns about, in frame px (may lie outside the frame, e.g. the foot of the stand);
+        /// 🐱 nil = the image centre.
+        public var shakePivot: (x: Double, y: Double)?
+        /// 🐱 Further per-frame camera motion (std): zoom (relative), shear (x shift per px of y, as a rolling shutter
+        /// 🐱 skews a moving picture) and keystone (relative change of magnification from the centre to the edge, along
+        /// 🐱 x and along y, as when the camera tilts).
+        public var shakeZoomStd = 0.0
+        public var shakeShearStd = 0.0
+        public var shakeKeystoneStd = 0.0
         public var seed: UInt64 = 42
         /// 🐱 Probability that a frame is generated but not delivered (simulated camera/network drop).
         public var dropProbability = 0.0
@@ -208,6 +232,8 @@ public struct ParticleImageGenerator {
 
     /// 🐱 Current simulated camera pose (shift x, shift y, rotation), drawn anew for every frame.
     public private(set) var shake = (x: 0.0, y: 0.0, r: 0.0)
+    /// 🐱 zoom, shear, keystone x, keystone y of the current frame
+    public private(set) var shakeExtra = (zoom: 0.0, shear: 0.0, kx: 0.0, ky: 0.0)
     public private(set) var frameNumber = 0
 
     private func isStatic(_ x: Double, _ y: Double) -> Bool {
@@ -223,6 +249,10 @@ public struct ParticleImageGenerator {
         if configuration.shakeStdPx > 0 || configuration.shakeRotationStd > 0 {
             shake = (rng.nextGaussian() * configuration.shakeStdPx, rng.nextGaussian() * configuration.shakeStdPx,
                      rng.nextGaussian() * configuration.shakeRotationStd)
+        }
+        if configuration.shakeZoomStd > 0 || configuration.shakeShearStd > 0 || configuration.shakeKeystoneStd > 0 {
+            shakeExtra = (rng.nextGaussian() * configuration.shakeZoomStd, rng.nextGaussian() * configuration.shakeShearStd,
+                          rng.nextGaussian() * configuration.shakeKeystoneStd, rng.nextGaussian() * configuration.shakeKeystoneStd)
         }
         for i in positions.indices {
             let (x, y) = positions[i]
@@ -252,7 +282,10 @@ public struct ParticleImageGenerator {
         let inv2s2 = 1.0 / (2 * sigma * sigma)
         let peak = configuration.peakIntensity
         let (sx, sy, sr) = shake
+        let ex = shakeExtra
         let mx = Double(w) / 2, my = Double(h) / 2
+        let pivot = configuration.shakePivot ?? (x: mx, y: my)
+        let extra = ex.zoom != 0 || ex.shear != 0 || ex.kx != 0 || ex.ky != 0
         let seen = configuration.apparentPosition
         for q0 in positions {
             var q = q0
@@ -260,9 +293,16 @@ public struct ParticleImageGenerator {
                 guard let a = seen(q0.x, q0.y) else { continue }
                 q = (a.x, a.y)
             }
-            // 🐱 camera pose applied to the whole scene (rotation about the image centre, then shift)
-            let rx = q.x - mx, ry = q.y - my
-            let p = (x: mx + cos(sr) * rx - sin(sr) * ry + sx, y: my + sin(sr) * rx + cos(sr) * ry + sy)
+            // 🐱 camera pose applied to the whole scene: rotation (and zoom) about the pivot, then shift; then shear
+            // 🐱 and keystone about the image centre
+            let rx = q.x - pivot.x, ry = q.y - pivot.y
+            let z = 1 + ex.zoom
+            var p = (x: pivot.x + z * (cos(sr) * rx - sin(sr) * ry) + sx, y: pivot.y + z * (sin(sr) * rx + cos(sr) * ry) + sy)
+            if extra {
+                let cx0 = p.x - mx + ex.shear * (p.y - my), cy0 = p.y - my
+                let den = 1 + ex.kx * cx0 / mx + ex.ky * cy0 / my
+                p = (x: mx + cx0 / den, y: my + cy0 / den)
+            }
             let cx = Int(p.x.rounded()), cy = Int(p.y.rounded())
             let y0 = max(0, cy - radius), y1 = min(h - 1, cy + radius), x0 = max(0, cx - radius), x1 = min(w - 1, cx + radius)
             guard y0 <= y1, x0 <= x1 else { continue }   // 🐱 entirely outside the frame

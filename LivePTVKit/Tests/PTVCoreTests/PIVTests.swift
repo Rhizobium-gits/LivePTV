@@ -42,7 +42,7 @@ import Testing
         let a = render(p, w, h, seed: 5)
         let b = render(p.map { ($0.0 + 12.4, $0.1 + 5.2) }, w, h, seed: 6)
         // 🐱 32-px single pass: 12.4 px is beyond the quarter-window rule and mostly fails
-        var single = PIVParameters(); single.windowSizes = [32]
+        var single = PIVParameters(); single.windowSizes = [32]; single.finalIterations = 1
         let fs = try #require(PIVEngine(parameters: single).compute(a: a, b: b, dt: 1))
         let goodSingle = (0..<fs.count).filter { fs.status[$0] == .valid && abs(fs.dx[$0] - 12.4) < 0.5 }.count
         // 🐱 64 → 32 with window offset recovers it

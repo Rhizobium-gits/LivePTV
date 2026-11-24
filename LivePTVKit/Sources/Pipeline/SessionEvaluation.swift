@@ -59,6 +59,11 @@ struct FrameAggregate {
     var shakeApplied = 0
     var shakeLearning = 0
     var shakeMagnitudes = Reservoir(capacity: 20_000, seed: 0xF5)
+    var shakeModels: [String: Int] = [:]
+    var shakeRotationSq = 0.0
+    /// 🐱 pivot sums as in ShakeCompensator: Σ(s² + θ²), ΣMᵀt, Σ|t|², pairs, and the grid centre the motions refer to
+    var shakePivot = (m: 0.0, mtx: 0.0, mty: 0.0, tt: 0.0, n: 0)
+    var shakeCenter: (x: Double, y: Double)?
     /// 🐱 Camera-time series of the spatial mean speed (valid samples), one bin per second.
     var timeBins: [Int: (sum: Double, sumSq: Double, n: Int)] = [:]
 
@@ -80,9 +85,23 @@ struct FrameAggregate {
         }
         lastPTS = r.pts
         method = r.method
-        if r.piv != nil, let sh = r.shake {
+        if r.piv != nil || r.method == .ptv, let sh = r.shake {
             shakePairs += 1
-            if sh.applied { shakeApplied += 1; shakeMagnitudes.add(sh.magnitudePx) }
+            if sh.applied {
+                shakeApplied += 1
+                shakeMagnitudes.add(sh.magnitudePx)
+                shakeModels[sh.model, default: 0] += 1
+                shakeRotationSq += sh.rotation * sh.rotation
+                if sh.model != "translation" {
+                    let sc = sh.scale, th = sh.rotation
+                    shakePivot.m += sc * sc + th * th
+                    shakePivot.mtx += sc * sh.tx - th * sh.ty
+                    shakePivot.mty += th * sh.tx + sc * sh.ty
+                    shakePivot.tt += sh.tx * sh.tx + sh.ty * sh.ty
+                    shakePivot.n += 1
+                }
+                if shakeCenter == nil, let c = r.shakeCenter { shakeCenter = c }
+            }
             if sh.source == "learning background" { shakeLearning += 1 }
         }
         if r.excludeFromStatistics { shakeEnabled = true }
@@ -292,9 +311,58 @@ public struct SessionEvaluation: Codable, Sendable {
     public var warnings: [String]
     public var verdict: String
     public var corrections: Corrections? = nil
+    /// 🐱 Camera motion removed over the recording (PIV and PTV); nil when shake compensation was off.
+    public var cameraMotion: CameraMotion? = nil
+
+    public struct CameraMotion: Codable, Sendable {
+        public var pairsCorrected: Int
+        public var pairsLearning: Int
+        /// 🐱 how often each motion model was fitted
+        public var models: [String: Int]
+        public var shiftMedianPx: Double?
+        public var shiftP95Px: Double?
+        public var rotationRMSMrad: Double
+        /// 🐱 Point the motion turned about (full-frame px; may lie outside the frame) when rotation and zoom about one
+        /// 🐱 point explain ≥ 80 % of the fitted shifts, with that share.
+        public var pivotXPx: Double?
+        public var pivotYPx: Double?
+        public var pivotRSquared: Double?
+        public var pivotInsideFrame: Bool?
+        public var text: String
+    }
 }
 
 enum SessionEvaluator {
+    /// 🐱 Summary of the camera motion that was removed, with the session pivot (as `ShakeCompensator.pivot`).
+    static func cameraMotion(_ f: FrameAggregate, settings: AnalysisSettings) -> SessionEvaluation.CameraMotion? {
+        guard f.shakeEnabled else { return nil }
+        var px: Double?, py: Double?, r2: Double?, inside: Bool?
+        let s = f.shakePivot
+        if s.n >= 10, s.m > 0, s.tt > 0, let c = f.shakeCenter,
+           (s.m / Double(s.n)).squareRoot() * max(1, hypot(c.x, c.y)) >= 0.05 {
+            let qx = c.x - s.mtx / s.m, qy = c.y - s.mty / s.m
+            let dx = qx - c.x, dy = qy - c.y
+            let resid = s.tt + 2 * (dx * s.mtx + dy * s.mty) + s.m * (dx * dx + dy * dy)
+            let rr = 1 - max(0, resid) / s.tt
+            if rr >= 0.8 {
+                px = qx; py = qy; r2 = rr
+                if let roi = f.firstROI { inside = roi.contains(x: qx, y: qy) }
+            }
+        }
+        let rot = f.shakeApplied > 0 ? (f.shakeRotationSq / Double(f.shakeApplied)).squareRoot() * 1000 : 0
+        let models = f.shakeModels.sorted { $0.value > $1.value }.map { "\($0.key) \($0.value)" }.joined(separator: ", ")
+        var text = String(format: "%d pairs corrected (%@); shift median %.2f px, rotation RMS %.3f mrad.", f.shakeApplied,
+                          models.isEmpty ? "none" : models, f.shakeMagnitudes.percentile(0.5) ?? 0, rot)
+        if let px, let py, let r2 {
+            text += String(format: " The camera motion turned about a point at (%.0f, %.0f) px%@ (rotation and zoom about it explain %.0f %% of the shifts).",
+                           px, py, inside == false ? ", outside the frame" : "", r2 * 100)
+        }
+        return SessionEvaluation.CameraMotion(pairsCorrected: f.shakeApplied, pairsLearning: f.shakeLearning, models: f.shakeModels,
+                                              shiftMedianPx: f.shakeMagnitudes.percentile(0.5), shiftP95Px: f.shakeMagnitudes.percentile(0.95),
+                                              rotationRMSMrad: rot, pivotXPx: px, pivotYPx: py, pivotRSquared: r2, pivotInsideFrame: inside,
+                                              text: text)
+    }
+
     static func evaluate(stats: SessionFieldStatistics, cells: [CellStatistics], frames: FrameAggregate, metrics: PipelineMetrics,
                          settings: AnalysisSettings, grid: GridGeometry? = nil, refraction: RefractionMap? = nil,
                          rectified: Bool = false) -> SessionEvaluation {
@@ -492,6 +560,7 @@ enum SessionEvaluator {
             : warnings.filter { !$0.hasPrefix("No length calibration") }.isEmpty ? "Good"
             : "Usable with caveats"
         return SessionEvaluation(generatedAt: Date(), method: frames.method.rawValue, piv: pivQuality, mmPerPixel: mm, measurement: measurement, detection: detection, tracking: tracking,
-                                 field: field, diffusion: diffusion, warnings: warnings, verdict: verdict, corrections: corrections)
+                                 field: field, diffusion: diffusion, warnings: warnings, verdict: verdict, corrections: corrections,
+                                 cameraMotion: cameraMotion(frames, settings: settings))
     }
 }

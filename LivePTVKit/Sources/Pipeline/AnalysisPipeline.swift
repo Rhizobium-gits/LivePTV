@@ -55,7 +55,9 @@ public struct AnalysisSettings: Codable, Equatable, Sendable {
     public init() {}
 
     /// 🐱 2: intensity capping off by default. 3: reflections and container (new keys take their defaults).
-    public static let currentSchema = 3
+    /// 🐱 4: image deformation and 3 final iterations (a saved 2, the old default, becomes 3); automatic camera-motion
+    /// 🐱 model (a saved "similarity", the old default, becomes automatic).
+    public static let currentSchema = 4
 
     /// 🐱 Length scale in effect: a marked round container defines it (outer diameter ÷ silhouette width, exact at
     /// 🐱 the silhouette, where rays graze the wall); otherwise the entered calibration.
@@ -74,6 +76,16 @@ public struct AnalysisSettings: Codable, Equatable, Sendable {
         if savedSchema < 2, var piv = saved["piv"] as? [String: Any] {
             piv.removeValue(forKey: "intensityCapping")
             saved["piv"] = piv
+        }
+        // 🐱 schema 4 (0.8): image deformation, 3 final iterations by default (was 2); automatic camera-motion model
+        // 🐱 (was similarity)
+        if savedSchema < 4, var piv = saved["piv"] as? [String: Any] {
+            if piv["finalIterations"] as? Int == 2 { piv.removeValue(forKey: "finalIterations") }
+            saved["piv"] = piv
+        }
+        if savedSchema < 4, var shake = saved["shake"] as? [String: Any] {
+            if shake["model"] as? String == "similarity" { shake.removeValue(forKey: "model") }
+            saved["shake"] = shake
         }
         func merge(_ base: [String: Any], _ over: [String: Any]) -> [String: Any] {
             var out = base
@@ -153,6 +165,20 @@ public final class AnalysisPipeline: @unchecked Sendable {
     private var recentDisplacements: [Double] = []
     private var fieldsSinceKChange = 0
     private var lastShake: ShakeEstimate?
+    /// 🐱 PTV: camera motion from a coarse PIV of consecutive frames (32-px windows at half resolution), so particle
+    /// 🐱 velocities can be corrected like PIV vectors.
+    private let shakeEngine: PIVEngine = {
+        var p = PIVParameters()
+        p.windowSizes = [32]
+        p.finalIterations = 1
+        p.deformation = false
+        p.uncertainty = false
+        p.autoPairSpacing = false
+        return PIVEngine(parameters: p)
+    }()
+    private var ptvPrevious: (luma: LumaImage, index: Int, segment: Int, pts: Double)?
+    /// 🐱 PTV: accumulated camera motion (`ShakeEstimate.vector`, summed over pairs) at recent frame times.
+    private var cameraPoses: [(pts: Double, segment: Int, v: [Double])] = []
     private var pivField: PIVFieldAverager?
     /// 🐱 Field shown live: PIV updates it with every analysed pair; recorded snapshots stay at `fieldInterval`.
     private var displayField: FieldSnapshot?
@@ -324,6 +350,8 @@ public final class AnalysisPipeline: @unchecked Sendable {
             displayField = nil
             lastFieldTime = -.infinity
             lastSegment = frame.segment
+            ptvPrevious = nil
+            cameraPoses = []
         }
 
         lock.withLock { _lastFrame = frame }
@@ -358,8 +386,10 @@ public final class AnalysisPipeline: @unchecked Sendable {
                 }
             }
             step.trackIDs = [Int](repeating: 0, count: particles.count)
+            if s.shake.enabled { ptvCameraMotion(luma, frame: frame, settings: s) } else { lastShake = nil }
             if timingOK {
                 step = tracker.update(particles: particles, time: frame.presentationTime, frameIndex: frame.index)
+                if s.shake.enabled { step.samples = removeCameraMotion(step.samples, segment: frame.segment) }
                 if let c = container { step.samples = c.correct(step.samples) }
                 field?.add(step.samples)
                 if frame.presentationTime - lastFieldTime >= s.fieldInterval, let f = field {
@@ -481,7 +511,10 @@ public final class AnalysisPipeline: @unchecked Sendable {
             m.pivEnsemblePairs = s.piv.ensemble.enabled ? min(ensembleLive?.totalPairs ?? 0, max(1, s.piv.ensemble.livePairs)) : nil
             m.pivEnsembleRecordedPairs = s.piv.ensemble.enabled ? lock.withLock({ _ensemble })?.sessionPairs : nil
             m.pivEnsembleValidPercent = s.piv.ensemble.enabled ? ensembleLive?.validPercent : nil
-            m.shakeStatus = s.shake.enabled ? (lastShake.map { $0.applied ? "\($0.source), \($0.backgroundWindows) windows" : $0.source } ?? "waiting") : "off"
+            m.shakeStatus = s.shake.enabled ? (lastShake.map { $0.applied ? "\($0.source), \($0.backgroundWindows) windows, \($0.model)" : $0.source } ?? "waiting") : "off"
+            if s.shake.enabled, let pv = shakeCompensator.pivot {
+                m.shakeStatus += String(format: " · turns about (%.0f, %.0f) px", pv.x, pv.y)
+            }
             updateAutoScale(t1 - t0, settings: s)
         }
 
@@ -501,10 +534,11 @@ public final class AnalysisPipeline: @unchecked Sendable {
                 meanLuma: meanLuma, threshold: detector.lastThreshold, particles: particles, trackIDs: step.trackIDs,
                 tracks: tracker.tracks.count, samples: step.samples, metrics: m, mmPerPixel: s.effectiveMMPerPixel,
                 method: s.method, piv: piv, saveInstantaneous: saveInstantaneous, pairSpacing: pivK, pivScale: pivScale,
-                shake: s.method == .piv ? lastShake : nil,
+                shake: s.method == .piv || s.shake.enabled ? lastShake : nil,
                 // 🐱 while the shake compensator is still learning, vectors are uncorrected: keep them out of statistics
-                excludeFromStatistics: s.method == .piv && s.shake.enabled && piv != nil && lastShake?.source == "learning background",
-                maskStatistics: lastMaskStatistics, subpixelHistogram: subpixel))
+                excludeFromStatistics: s.shake.enabled && (s.method == .ptv || piv != nil) && lastShake?.source == "learning background",
+                maskStatistics: lastMaskStatistics, subpixelHistogram: subpixel,
+                shakeCenter: lastShake?.applied == true ? shakeCompensator.center : nil))
             if let f = lastField, f.time == frame.presentationTime { r.record(field: f, mmPerPixel: s.effectiveMMPerPixel) }
         }
 
@@ -646,6 +680,44 @@ public final class AnalysisPipeline: @unchecked Sendable {
         return image
     }
 
+    /// 🐱 PTV: camera motion between the previous and this frame, from a coarse PIV of the raw frames (static windows,
+    /// 🐱 as for PIV), accumulated into `cameraPoses`.
+    private func ptvCameraMotion(_ luma: LumaImage, frame: VideoFrame, settings s: AnalysisSettings) {
+        defer { ptvPrevious = (luma, frame.index, frame.segment, frame.presentationTime) }
+        var v = cameraPoses.last.flatMap { $0.segment == frame.segment ? $0.v : nil } ?? [Double](repeating: 0, count: 10)
+        if let p = ptvPrevious, p.segment == frame.segment, frame.index > p.index, frame.index - p.index <= 3,
+           p.luma.width == luma.width, p.luma.height == luma.height, p.luma.originX == luma.originX, p.luma.originY == luma.originY {
+            let f2 = luma.width >= 256 && luma.height >= 192 ? 2 : 1
+            if var f = shakeEngine.compute(a: p.luma.downsampled(by: f2), b: luma.downsampled(by: f2), dt: frame.presentationTime - p.pts) {
+                let est = shakeCompensator.compensate(&f, pairSpacing: frame.index - p.index, parameters: s.shake)
+                lastShake = est
+                if est.applied {
+                    let e = est.vector
+                    for i in 0..<10 { v[i] += e[i] }
+                }
+            }
+        }
+        cameraPoses.append((frame.presentationTime, frame.segment, v))
+        if cameraPoses.count > 16 { cameraPoses.removeFirst(cameraPoses.count - 16) }
+    }
+
+    /// 🐱 PTV: subtract the camera motion between each sample's two frames, at the sample's position.
+    private func removeCameraMotion(_ samples: [VelocitySample], segment: Int) -> [VelocitySample] {
+        guard !cameraPoses.isEmpty else { return samples }
+        let c = shakeCompensator.center
+        return samples.map { s0 in
+            var s = s0
+            let t0 = s.t - s.dt / 2, t1 = s.t + s.dt / 2
+            guard let a = cameraPoses.last(where: { $0.segment == segment && abs($0.pts - t0) < 1e-6 }),
+                  let b = cameraPoses.last(where: { $0.segment == segment && abs($0.pts - t1) < 1e-6 }) else { return s }
+            let d = ShakeEstimate(vector: zip(b.v, a.v).map { $0 - $1 }).displacement(x: s.x, y: s.y, cx: c.x, cy: c.y)
+            s.dx -= d.0
+            s.dy -= d.1
+            if s.dt > 0 { s.u = s.dx / s.dt; s.v = s.dy / s.dt }
+            return s
+        }
+    }
+
     /// 🐱 Frames pre-processed WITHOUT background subtraction or masks (for the camera-motion fit).
     private var rawCache: [(index: Int, segment: Int, scale: Int, x: Int, y: Int, w: Int, h: Int, parameters: PIVParameters, image: PIVImage)] = []
 
@@ -729,7 +801,7 @@ public final class AnalysisPipeline: @unchecked Sendable {
         if s.pivResolution != appliedSettings.pivResolution {
             pivAutoScale = 1; framesAtScale = 0; pivAnalysisEMA = nil; shakeCompensator.reset()
         }
-        if s.method != appliedSettings.method { pivK = 1; shakeCompensator.reset() }
+        if s.method != appliedSettings.method { pivK = 1; shakeCompensator.reset(); ptvPrevious = nil; cameraPoses = [] }
         appliedSettings = s
     }
 

@@ -39,7 +39,11 @@ struct AnalysisSettingsView: View {
                     numberD("Median test threshold", $model.settings.piv.validationThreshold, 1...10, 0.5)
                     Toggle("Replace invalid vectors (flagged)", isOn: $model.settings.piv.replaceInvalid)
                     Stepper("Save every \(model.settings.piv.saveEveryNthField)th field to CSV", value: $model.settings.piv.saveEveryNthField, in: 0...300, step: 5)
-                    Picker("Sub-pixel window shift", selection: $model.settings.piv.windowInterpolation) {
+                    Toggle("Window deformation (follows velocity gradients)", isOn: $model.settings.piv.deformation)
+                    if model.settings.piv.deformation {
+                        Toggle("Smooth the predictor (lower noise; off: finer detail)", isOn: $model.settings.piv.predictorSmoothing)
+                    }
+                    Picker("Sub-pixel interpolation", selection: $model.settings.piv.windowInterpolation) {
                         Text("Lanczos 8-tap (accurate)").tag(PIVParameters.WindowInterpolation.lanczos4)
                         Text("Bilinear (fast, biased)").tag(PIVParameters.WindowInterpolation.bilinear)
                     }
@@ -61,15 +65,14 @@ struct AnalysisSettingsView: View {
                 Section {
                     Toggle("Remove camera shake", isOn: $model.settings.shake.enabled)
                     Picker("Camera motion model", selection: $model.settings.shake.model) {
-                        Text("Shift + rotation + zoom").tag(ShakeParameters.Model.similarity)
-                        Text("Shift only").tag(ShakeParameters.Model.translation)
+                        ForEach(ShakeParameters.Model.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
                     numberD("Static threshold (px per frame)", $model.settings.shake.staticThresholdPxPerFrame, 0.02...1, 0.01)
                     Stepper("Learning pairs: \(model.settings.shake.warmupPairs)", value: $model.settings.shake.warmupPairs, in: 5...100, step: 5)
                 } header: {
-                    Text("Camera shake (PIV)")
+                    Text("Camera shake (PIV and PTV)")
                 } footer: {
-                    Text("Areas whose average motion stays near zero are treated as static background; their common motion in each pair (shift, rotation, zoom) is subtracted from every vector. If too little background is found, nothing is corrected and the status says so. For very slow flows, draw a reference area on something fixed.")
+                    Text("Areas whose average motion stays near zero are treated as static background; their common motion in each pair is subtracted from every vector and particle step. Automatic picks per pair among shift, rotation + zoom (about any point, also outside the picture), shear (rolling shutter) and keystone (camera tilt), using only what the static areas can determine; when the camera keeps turning about one point (a swaying stand), that point is learned and shown. If too little background is found, nothing is corrected and the status says so. For very slow flows, draw a reference area on something fixed.")
                 }
                 reflectionSection
                 containerSection

@@ -49,12 +49,13 @@ import Testing
                 Double(dark.filter { f.status[$0] == .valid }.count) / Double(max(1, dark.count)))
     }
 
-    /// 🐱 18 difficult image pairs (3 seeds × lighting / noise / seeding levels). Measured: high-pass only valid
-    /// 🐱 91.9 %, rms 0.148 px; normalisation (default) 91.8 %, 0.146 px; normalisation + intensity capping (the
-    /// 🐱 earlier default) 90.5 %, 0.171 px. Capping is what hurt; normalisation alone is on par with high-pass.
+    /// 🐱 18 difficult image pairs (3 seeds × lighting / noise / seeding levels), uniform flow. Capping is what hurt
+    /// 🐱 (the earlier default); normalisation alone is on par with high-pass. Image deformation (default since 0.8)
+    /// 🐱 costs a little here, where there are no gradients to resolve and the predictor's noise partly propagates;
+    /// 🐱 see the printed line for the numbers (≤ 0.7 with window shift: valid 91.8 %, rms 0.177 px).
     @Test func defaultPreprocessingOnDifficultImages() {
         let shift = (2.3, -1.1)
-        var valid = [0.0, 0.0, 0.0], rms = [0.0, 0.0, 0.0]
+        var valid = [0.0, 0.0, 0.0, 0.0], rms = [0.0, 0.0, 0.0, 0.0]
         var n = 0.0
         for seed in [11, 12, 13] as [UInt64] {
             for (light, noise, density) in [(0.15, 3.0, 45), (0.05, 3.0, 45), (0.15, 6.0, 45), (0.05, 6.0, 90), (0.1, 5.0, 120), (0.3, 3.0, 25)] {
@@ -63,7 +64,9 @@ import Testing
                 highPass.normalizationRadius = 0
                 var capped = PIVParameters()
                 capped.intensityCapping = true
-                for (i, p) in [PIVParameters(), highPass, capped].enumerated() {
+                var shifted = PIVParameters()
+                shifted.deformation = false
+                for (i, p) in [PIVParameters(), highPass, capped, shifted].enumerated() {
                     let r = score(p, a, b, shift)
                     valid[i] += r.valid
                     rms[i] += r.rms
@@ -71,11 +74,12 @@ import Testing
                 n += 1
             }
         }
-        print(String(format: "ROBUST mean valid: default %.1f %%, high-pass only %.1f %%, with capping %.1f %% | mean rms: %.3f, %.3f, %.3f px",
-                     100 * valid[0] / n, 100 * valid[1] / n, 100 * valid[2] / n, rms[0] / n, rms[1] / n, rms[2] / n))
+        print(String(format: "ROBUST mean valid: default %.1f %%, high-pass only %.1f %%, with capping %.1f %%, window shift %.1f %% | mean rms: %.3f, %.3f, %.3f, %.3f px",
+                     100 * valid[0] / n, 100 * valid[1] / n, 100 * valid[2] / n, 100 * valid[3] / n, rms[0] / n, rms[1] / n, rms[2] / n, rms[3] / n))
         #expect(valid[0] > valid[2] && rms[0] < 0.92 * rms[2])     // 🐱 capping off is clearly better
-        #expect(abs(rms[0] - rms[1]) < 0.1 * rms[1] && abs(valid[0] - valid[1]) / n < 0.01)   // 🐱 on par with high-pass
-        #expect(rms[0] / n < 0.19)
+        #expect(abs(rms[0] - rms[1]) < 0.12 * rms[1] && abs(valid[0] - valid[1]) / n < 0.01)   // 🐱 on par with high-pass
+        #expect(rms[0] < 1.2 * rms[3] && (valid[3] - valid[0]) / n < 0.04)   // 🐱 the cost of deformation stays small
+        #expect(rms[0] / n < 0.21)
     }
 
     /// 🐱 Window-shift interpolation on the same 18 difficult pairs: the 8-tap windowed sinc removes most of the bias
