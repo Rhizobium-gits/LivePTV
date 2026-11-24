@@ -83,7 +83,7 @@ struct AnalysisSettingsView: View {
                     }
                     Toggle("Background subtraction", isOn: $model.settings.detector.backgroundSubtraction)
                     Toggle("Smoothing (1-2-1)", isOn: $model.settings.detector.smoothing)
-                    number("Threshold k (mean + k·σ)", $model.settings.detector.thresholdK, 0.5...20, 0.5)
+                    number("Threshold k (× noise σ above the background)", $model.settings.detector.thresholdK, 0.5...20, 0.5)
                     number("Minimum threshold (grey levels)", $model.settings.detector.minimumThreshold, 1...200, 1)
                     numberD("Minimum separation (px)", $model.settings.detector.minSeparation, 1...30, 0.5)
                     Stepper("Fit window radius: \(model.settings.detector.windowRadius) px", value: $model.settings.detector.windowRadius, in: 1...5)

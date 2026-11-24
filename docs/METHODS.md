@@ -583,12 +583,31 @@ learning are excluded.
 
 ## 15. PTV and Brownian diffusion
 
-**Detection.** Background removal (slow lower envelope), 1-2-1 smoothing, adaptive threshold (mean + kσ, at least
-8 grey levels), local maxima with non-maximum suppression, then a 3-point Gaussian sub-pixel fit (centroid as
-fallback). Detections on masked pixels (glare, glints, walls, exclusions) are discarded.
+**Detection.** Background removal (slow lower envelope), 1-2-1 smoothing, a threshold from robust statistics,
+local maxima with non-maximum suppression, then a 3-point Gaussian sub-pixel fit (centroid as fallback). Detections on
+masked pixels (glare, glints, walls, exclusions) are discarded.
 
-**Tracking.** Constant-velocity prediction plus neighbour prediction for new tracks, greedy nearest assignment
-within the search radius, and normalised-median outlier flags against neighbouring samples.
+- *Threshold* $= \max(T_\text{min},\ \ell + k\,\sigma)$, where $\ell$ and $\sigma = 1.4826\,\mathrm{MAD}$ are the median and
+  robust spread of the signed, smoothed foreground (from a 1/16-grey-level histogram, O(n)); $k = 5$, $T_\text{min} = 8$.
+  The mean and standard deviation of the whole image, used before 0.8, grow with the number and brightness of the
+  particles, so the threshold rose with seeding density and lost faint particles; the median and MAD stay at the
+  background and its noise while particles cover less than about a quarter of the image. $k$ was chosen so that no
+  condition of the detection benchmark falls below 0.997 precision and pure noise gives no detections.
+- *Background.* The running background is updated after detection and not under the footprint of this frame's
+  detections (above-threshold radius + 2 px). A slowly moving particle otherwise leaks into the background at the
+  places it has just occupied; subtracting that ghost pushed the detected centre forward along its motion, which made
+  Brownian steps about 20 % too long (D +37 %). Detections that stay within ±1 px for 30 frames are static structures
+  and are learned as before.
+
+**Tracking.** Each established track predicts its next position from its velocity (and from its acceleration while
+its last two accelerations agree). Candidate links lie within $r = (r_p + 0.1\,|\mathbf{v}|\,\Delta t)(1 + n_\text{missed}/2)$,
+$r_p = 4$ px. Tracks and particles are then matched by **global minimum-cost assignment** (cost $|\mathbf{x}-\hat{\mathbf{x}}|^2/r^2$,
+leaving a track unmatched costs 1), solved exactly per connected group of candidates by shortest augmenting paths
+(Hungarian / Jonker–Volgenant); groups larger than 2000 fall back to closest-first. Tracks without a prediction (the
+first frames, new particles) are matched by a **neighbour-consistency vote**: the displacement agreed by most nearby
+unmatched particles wins, rather than the nearest particle. New tracks take the median velocity of their 8 nearest
+established neighbours. Samples are flagged by a normalised median test against neighbouring samples. Before 0.8
+links were made greedily, nearest first, with a fixed 4-px prediction radius.
 
 **Diffusion.** From drift-corrected displacements per cell at lags of one and two frames. With localisation noise
 $\sigma$ (Michalet 2010):
@@ -597,6 +616,19 @@ $$ \operatorname{var}(\Delta_k) = 2Dk\Delta t + 2\sigma^2 \ \Rightarrow\ D = \fr
 
 with a robust guard against mismatches (6 robust σ). The Stokes–Einstein diameter is
 $d_h = k_B T / (3\pi\eta D)$, given when calibrated and $D > 2\,\mathrm{SE}$. Measured: D within 4 % (true 3 px²/s).
+
+Measured (`PTVAccuracyTests`, `AssignmentSolverTests` and the benchmark in `benchmarks/`, against trackpy 0.7):
+
+| Case | LivePTV 0.7 | LivePTV 0.8 | trackpy 0.7 |
+| --- | --- | --- | --- |
+| Detection recall at 0.01 particles/px, 2.5–4 px images | 0.45–0.53 | 0.76–0.89 | 0.77–0.87 (minimum mass tuned) |
+| Detection precision, worst of 12 conditions | 0.990 | 0.997 | 0.983 |
+| Links, 5000 particles, 10 px/frame (1.4 spacings): precision / recall | 0.32 / 0.21 | 0.98 / 0.97 | 0.77 / 0.67 |
+| Brownian D, synthetic, background removal on: lag 1–2 / 10-lag MSD | +37 % / +26 % | +3 % / +4 % | +5 % / +1 % |
+| 1920 × 1080 frame, ~20,000 particles: detect + track | | 52 ms | 0.49 s |
+
+Small particle images (1.5 px) in heavy noise are the exception: recall 0.65 → 0.57 (trackpy 0.58), because the new
+threshold no longer sits low enough to catch them; lower k if they matter.
 
 ## 16. Outputs
 
@@ -632,7 +664,8 @@ and the end-of-measurement evaluation:
 | Camera shake (`EvaluationTests`) | slow vortex kept; shake removed; residual 0.069 px with background removal |
 | Camera motion beyond shift (`CameraMotionTests`, `CameraMotionPipelineTests`) | stand sway about a point 900 px below the picture: border fluctuation 13.96 → 1.20 px/s, pivot within 25 px; PTV velocity error 10.52 → 3.55 px/s; shear + keystone: 4.87 → 1.46 px/s vs similarity |
 | Ensemble correlation (`EnsembleTests`, `EvaluationTests`) | 8.5 % vs 11.8 % vector average on faint sparse vortex; 99 % valid |
-| Brownian diffusion (`SessionStatisticsTests`, `EvaluationTests`) | D within 4 % |
+| Brownian diffusion (`SessionStatisticsTests`, `EvaluationTests`, `PTVAccuracyTests`) | D within 4 %; with background removal on +5 % (was +35 %) |
+| PTV detection and tracking (`PTVAccuracyTests`, `AssignmentSolverTests`) | dense image recall 1.00 (was 0.44); no detections on pure noise; dense fast flow links 0.97 / 0.96 (was 0.29 / 0.19) |
 | GPU vs CPU correlation (`GPUCorrelationTests`) | identical statuses; vectors within 7·10⁻⁵ px with deformation (deformed frames bit-identical), 6·10⁻⁷ px with window shift; σ within 0.1 % |
 | Image deformation (`DeformationTests`) | sinusoid λ = 2 windows: amplitude 0.72 → 0.84; λ = 5 windows 1.00 (no overshoot); Lamb–Oseen vortex 0.104 → 0.022 px; uniform flow 0.0059 → 0.0066 px |
 | Vector positions and edges (`DeformationTests`, `GridKernelTests`) | position offset 0.5 → < 0.1 px; edge rows in a shear flow: 58–71 % replaced → 0 %, position within 0.3 px |

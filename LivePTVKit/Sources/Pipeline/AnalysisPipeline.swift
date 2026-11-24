@@ -56,7 +56,8 @@ public struct AnalysisSettings: Codable, Equatable, Sendable {
 
     /// 🐱 2: intensity capping off by default. 3: reflections and container (new keys take their defaults).
     /// 🐱 4: image deformation and 3 final iterations (a saved 2, the old default, becomes 3); automatic camera-motion
-    /// 🐱 model (a saved "similarity", the old default, becomes automatic).
+    /// 🐱 model (a saved "similarity", the old default, becomes automatic); detection threshold k × robust noise σ
+    /// 🐱 (a saved k is dropped).
     public static let currentSchema = 4
 
     /// 🐱 Length scale in effect: a marked round container defines it (outer diameter ÷ silhouette width, exact at
@@ -86,6 +87,12 @@ public struct AnalysisSettings: Codable, Equatable, Sendable {
         if savedSchema < 4, var shake = saved["shake"] as? [String: Any] {
             if shake["model"] as? String == "similarity" { shake.removeValue(forKey: "model") }
             saved["shake"] = shake
+        }
+        // 🐱 schema 4: the detection threshold k now multiplies a robust noise σ (median + k·MAD-σ), not the standard
+        // 🐱 deviation of the whole image, so an old saved k means something else: drop it (new default 5)
+        if savedSchema < 4, var detector = saved["detector"] as? [String: Any] {
+            detector.removeValue(forKey: "thresholdK")
+            saved["detector"] = detector
         }
         func merge(_ base: [String: Any], _ over: [String: Any]) -> [String: Any] {
             var out = base
