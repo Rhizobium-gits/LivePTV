@@ -1,0 +1,58 @@
+{
+ "source": "Insta360 Ace Pro 2 (USB webcam mode) on a desk, 15 s of a still room at 1920x1080 / 29.97 fps, replayed with `ace-probe file` (default settings, PIV, camera-motion correction automatic); 'before' = without the re-measurement offset, corner-leverage condition, consistency check and pivot noise condition (2026-11-25). Numbers from python/shake_check.py (frames.csv) and python/field_check.py (mean_field.csv) on the session folders. The clip is not redistributed.",
+ "half_resolution": {
+  "edge_correction_px": {
+   "before": {
+    "median": 0.937,
+    "p95": 18.605,
+    "max": 516.12
+   },
+   "now": {
+    "median": 0.041,
+    "p95": 0.271,
+    "max": 1.2
+   }
+  },
+  "mean_field_temporal_std_px_s": {
+   "before": 11.83,
+   "now": 0.81,
+   "no_correction": 9.22
+  },
+  "pivot_pairs": {
+   "before": 0,
+   "now": 0
+  },
+  "background_windows_median": {
+   "before": 46,
+   "now": 75
+  }
+ },
+ "full_resolution": {
+  "edge_correction_px": {
+   "before": {
+    "median": 0.01,
+    "p95": 0.045,
+    "max": 1.38
+   },
+   "now": {
+    "median": 0.007,
+    "p95": 0.033,
+    "max": 0.18
+   }
+  },
+  "mean_field_temporal_std_px_s": {
+   "before": 30.79,
+   "now": 1.28,
+   "no_correction": 30.18
+  },
+  "pivot_pairs": {
+   "before": 221,
+   "now": 0
+  },
+  "background_windows_median": {
+   "before": 1287,
+   "now": 1557
+  }
+ },
+ "pairs": 416
+}

@@ -115,10 +115,11 @@ def run_liveptv(pairs, windows=(64, 32), overlap=0.5, iters=2, interp="lanczos4"
 
 
 def run_openpiv(A, B, windows=(64, 32), overlap=0.5, iters=2, deform="symmetric", median_threshold=2.0,
-                validate=True):
+                validate=True, highpass=None, normalized=False):
     """OpenPIV windef (iterative image deformation), without the final y-flip, so coordinates and v are in image
-    convention (y down). Returns dict(x, y, dx, dy, status) and elapsed ms."""
-    from openpiv import windef, validation, filters
+    convention (y down). `highpass` (σ, px): OpenPIV's high-pass pre-filter on both frames (included in the time);
+    `normalized`: normalised correlation. Returns dict(x, y, dx, dy, status) and elapsed ms."""
+    from openpiv import windef, validation, filters, preprocess
     s = windef.PIVSettings()
     ws = list(windows[:-1]) + [windows[-1]] * iters
     s.windowsizes = tuple(ws)
@@ -132,6 +133,7 @@ def run_openpiv(A, B, windows=(64, 32), overlap=0.5, iters=2, deform="symmetric"
     s.min_max_u_disp = (-60, 60)
     s.min_max_v_disp = (-60, 60)
     s.show_plot = False
+    s.normalized_correlation = normalized
     if not validate:
         s.median_threshold = 1e9
         s.std_threshold = 1e9
@@ -140,6 +142,9 @@ def run_openpiv(A, B, windows=(64, 32), overlap=0.5, iters=2, deform="symmetric"
     t0 = time.perf_counter()
     a = A.astype(np.float64)
     b = B.astype(np.float64)
+    if highpass:
+        a = preprocess.high_pass(a, sigma=highpass)
+        b = preprocess.high_pass(b, sigma=highpass)
     x, y, u, v, s2n = windef.first_pass(a, b, s)
     u = np.ma.array(u, mask=np.zeros_like(u, dtype=bool))
     v = np.ma.array(v, mask=np.zeros_like(v, dtype=bool))
