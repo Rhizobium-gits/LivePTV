@@ -239,8 +239,11 @@ def camera():
               f"({sw['pivot_truth_px'][0]}, {sw['pivot_truth_px'][1]}) px (R² {sw['pivot_r2']:.2f}) and reported as outside "
               f"the frame. Unit tests: a pivot 1500 px below the picture is learned within {abs(u['pivot_1500px_below']['learned_px'][1] - u['pivot_1500px_below']['truth_px'][1]) + abs(u['pivot_1500px_below']['learned_px'][0] - u['pivot_1500px_below']['truth_px'][0])} px; "
               "with static background on one side only, shear and keystone are never fitted; a pure shift with noise is "
-              f"fitted as a shift in all {u['pure_shift_noise_0p05px']['models']['translation']} pairs. The mean field is hardly "
-              "affected either way (zero-mean shake averages out); the compensation is for fluctuations and single PTV steps."
+              f"fitted as a shift in all {u['pure_shift_noise_0p05px']['models']['translation']} pairs. The compensation is for "
+              "fluctuations and single PTV steps: zero-mean shake averages out of the mean field, and there compensation costs a "
+              f"little (mean-field error {100 * c['showcase_stand_sway']['mean_field_rel_rms']['uncompensated']:.2f} % without, "
+              f"{100 * c['showcase_stand_sway']['mean_field_rel_rms']['automatic']:.2f} % with), because the long-term mean "
+              "motion is kept as possible flow and its estimate is uncertain."
             + '\n\n<img src="docs/images/bench_camera_motion.png" alt="Fluctuation maps without and with compensation, and the learned pivot">')
     return details("C · Camera motion", "fluctuation 13.96 → 1.20 px/s for a stand swaying about its foot; pivot within 25 px", body)
 

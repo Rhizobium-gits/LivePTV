@@ -414,7 +414,7 @@ The synthetic camera moves the whole picture each frame (rotation about a chosen
 | rolling-shutter shear + keystone: static border (similarity model vs automatic) | 4.87 px/s | 1.46 px/s |
 | same: flow | 3.56 px/s | 0.88 px/s |
 
-The pivot was found at (311, 1357) px for the true (320, 1380) px (R² 1.00) and reported as outside the frame. Unit tests: a pivot 1500 px below the picture is learned within 25 px; with static background on one side only, shear and keystone are never fitted; a pure shift with noise is fitted as a shift in all 65 pairs. The mean field is hardly affected either way (zero-mean shake averages out); the compensation is for fluctuations and single PTV steps.
+The pivot was found at (311, 1357) px for the true (320, 1380) px (R² 1.00) and reported as outside the frame. Unit tests: a pivot 1500 px below the picture is learned within 25 px; with static background on one side only, shear and keystone are never fitted; a pure shift with noise is fitted as a shift in all 65 pairs. The compensation is for fluctuations and single PTV steps: zero-mean shake averages out of the mean field, and there compensation costs a little (mean-field error 0.94 % without, 1.24 % with), because the long-term mean motion is kept as possible flow and its estimate is uncertain.
 
 <img src="docs/images/bench_camera_motion.png" alt="Fluctuation maps without and with compensation, and the learned pivot">
 
