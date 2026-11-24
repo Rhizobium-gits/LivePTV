@@ -471,6 +471,7 @@ public final class AnalysisPipeline: @unchecked Sendable {
         if let p = piv {
             m.pivUncertaintyPx = p.medianSigma
             m.particleImageDiameterPx = p.particleImageDiameterPx
+            m.pivDevice = pivEngine.lastDevice
         }
         if s.method == .piv {
             m.pivPairSpacing = pivK

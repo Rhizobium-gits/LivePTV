@@ -51,6 +51,9 @@ public struct PIVParameters: Codable, Equatable, Sendable {
     public var uncertainty = true
     /// 🐱 Interpolation for the sub-pixel window shift of the final passes (predictor passes always use bilinear).
     public var windowInterpolation: WindowInterpolation = .lanczos4
+    /// 🐱 Correlate the 32-px windows on the GPU (Metal) when the device has one that passes its self-check; otherwise,
+    /// 🐱 and for other window sizes, on the CPU. Same vectors either way (GPUCorrelationTests: within 1e-6 px).
+    public var useGPU = true
 
     public enum WindowInterpolation: String, Codable, CaseIterable, Sendable {
         /// 🐱 2×2 taps: fast, but its asymmetric kernel skews the correlation peak (≈0.03–0.09 px systematic error)
@@ -161,6 +164,11 @@ public final class PIVEngine: @unchecked Sendable {
     public var parameters: PIVParameters
     private var setup: FFTSetup?
     private var setupLog2 = 0
+    /// 🐱 Where the passes of the last `compute` ran: "GPU (Apple M4)", "CPU", or "GPU (…) + CPU" when the predictor
+    /// 🐱 pass (64 px) ran on the CPU and the 32-px passes on the GPU.
+    public private(set) var lastDevice = "CPU"
+    /// 🐱 Name of the GPU the engine would use, nil if none passed the self-check.
+    public static var gpuName: String? { MetalCorrelator.shared?.deviceName }
 
     public init(parameters: PIVParameters = PIVParameters()) { self.parameters = parameters }
 
@@ -302,6 +310,8 @@ public final class PIVEngine: @unchecked Sendable {
         let minCoverage = Float(1 - max(0, min(1, parameters.maxMaskedFraction)))
         var predictor: PIVField?
         var result: PIVField?
+        var passesOnGPU = 0, passesOnCPU = 0
+        let gpu = parameters.useGPU ? MetalCorrelator.shared : nil
         let schedule = sizes.dropLast().map { ($0, false) } + Array(repeating: (sizes.last!, true), count: max(1, parameters.finalIterations))
         for (pass, (w, final)) in schedule.enumerated() {
             let last = pass == schedule.count - 1
@@ -324,49 +334,57 @@ public final class PIVEngine: @unchecked Sendable {
             let widths = UnsafeMutablePointer<Float>.allocate(capacity: n)
             sigX.initialize(repeating: 0, count: n); sigY.initialize(repeating: 0, count: n); widths.initialize(repeating: 0, count: n)
             defer { sigX.deallocate(); sigY.deallocate(); widths.deallocate() }
-            field.dx.withUnsafeMutableBufferPointer { DX in
-                field.dy.withUnsafeMutableBufferPointer { DY in
-                    field.status.withUnsafeMutableBufferPointer { ST in
-                        field.correlation.withUnsafeMutableBufferPointer { CO in
-                            let dxp = DX.baseAddress!, dyp = DY.baseAddress!, stp = ST.baseAddress!, cop = CO.baseAddress!
-                            A.withUnsafeBufferPointer { Ap in
-                                B.withUnsafeBufferPointer { Bp in
-                                    DispatchQueue.concurrentPerform(iterations: rows) { j in
-                                        var work = CorrelationWork(size: w)
-                                        var i = -1
-                                        while i + 1 < cols {
-                                            i += 1
-                                            let k = j * cols + i
-                                            if let cv = coverage {
-                                                // 🐱 usable share of the window at its nominal position
-                                                let ci = min(H - 1, j * step + w / 2) * W + min(W - 1, i * step + w / 2)
-                                                if cv[ci] < minCoverage { stp[k] = .masked; continue }
-                                            }
-                                            // 🐱 window centre relative to the ROI
-                                            let cx = Double(i * step) + Double(w) / 2, cy = Double(j * step) + Double(w) / 2
-                                            var sx = 0.0, sy = 0.0
-                                            if let p = pred {
-                                                let d = p.interpolate(x: cx, y: cy)
-                                                sx = d.dx; sy = d.dy
-                                            }
-                                            // 🐱 symmetric sub-pixel offset: A moves back half the predicted shift, B forward the rest;
-                                            // 🐱 near the edges the pair slides inward (same shift) so both windows stay inside the image
-                                            guard let ax = Self.place(Double(i * step) - sx / 2, shift: sx, window: w, size: W),
-                                                  let ay = Self.place(Double(j * step) - sy / 2, shift: sy, window: w, size: H) else { continue }
-                                            work.fill(Ap.baseAddress!, W, x0: ax, y0: ay, into: true, kernel: kernel, height: H)
-                                            work.fill(Bp.baseAddress!, W, x0: ax + sx, y0: ay + sy, into: false, kernel: kernel, height: H)
-                                            // 🐱 statistics of the aligned windows, before the FFT reuses them as scratch
-                                            let sigma = wantSigma ? work.uncertainty() : nil
-                                            guard let r = work.correlate(setup: setup, minContrast: params.minWindowContrast) else { continue }
-                                            dxp[k] = sx + r.dx
-                                            dyp[k] = sy + r.dy
-                                            cop[k] = r.correlation
-                                            // 🐱 residual beyond a quarter window means the offset prediction failed
-                                            let ok = Double(r.correlation) >= params.minCorrelation && abs(r.dx) < Double(w) / 4 + 1 && abs(r.dy) < Double(w) / 4 + 1
-                                            stp[k] = ok ? .valid : .invalid
-                                            if last {
-                                                if let sigma { sigX[k] = sigma.x; sigY[k] = sigma.y }
-                                                widths[k] = r.peakWidth
+            let onGPU = gpu.map {
+                Self.gpuPass($0, A, B, W: W, H: H, w: w, step: step, cols: cols, rows: rows, predictor: pred, coverage: coverage,
+                             minCoverage: minCoverage, kernel: kernel, wantSigma: wantSigma, last: last, parameters: params,
+                             field: &field, sigX: sigX, sigY: sigY, widths: widths)
+            } ?? false
+            if onGPU { passesOnGPU += 1 } else { passesOnCPU += 1 }
+            if !onGPU {
+                field.dx.withUnsafeMutableBufferPointer { DX in
+                    field.dy.withUnsafeMutableBufferPointer { DY in
+                        field.status.withUnsafeMutableBufferPointer { ST in
+                            field.correlation.withUnsafeMutableBufferPointer { CO in
+                                let dxp = DX.baseAddress!, dyp = DY.baseAddress!, stp = ST.baseAddress!, cop = CO.baseAddress!
+                                A.withUnsafeBufferPointer { Ap in
+                                    B.withUnsafeBufferPointer { Bp in
+                                        DispatchQueue.concurrentPerform(iterations: rows) { j in
+                                            var work = CorrelationWork(size: w)
+                                            var i = -1
+                                            while i + 1 < cols {
+                                                i += 1
+                                                let k = j * cols + i
+                                                if let cv = coverage {
+                                                    // 🐱 usable share of the window at its nominal position
+                                                    let ci = min(H - 1, j * step + w / 2) * W + min(W - 1, i * step + w / 2)
+                                                    if cv[ci] < minCoverage { stp[k] = .masked; continue }
+                                                }
+                                                // 🐱 window centre relative to the ROI
+                                                let cx = Double(i * step) + Double(w) / 2, cy = Double(j * step) + Double(w) / 2
+                                                var sx = 0.0, sy = 0.0
+                                                if let p = pred {
+                                                    let d = p.interpolate(x: cx, y: cy)
+                                                    sx = d.dx; sy = d.dy
+                                                }
+                                                // 🐱 symmetric sub-pixel offset: A moves back half the predicted shift, B forward the rest;
+                                                // 🐱 near the edges the pair slides inward (same shift) so both windows stay inside the image
+                                                guard let ax = Self.place(Double(i * step) - sx / 2, shift: sx, window: w, size: W),
+                                                      let ay = Self.place(Double(j * step) - sy / 2, shift: sy, window: w, size: H) else { continue }
+                                                work.fill(Ap.baseAddress!, W, x0: ax, y0: ay, into: true, kernel: kernel, height: H)
+                                                work.fill(Bp.baseAddress!, W, x0: ax + sx, y0: ay + sy, into: false, kernel: kernel, height: H)
+                                                // 🐱 statistics of the aligned windows, before the FFT reuses them as scratch
+                                                let sigma = wantSigma ? work.uncertainty() : nil
+                                                guard let r = work.correlate(setup: setup, minContrast: params.minWindowContrast) else { continue }
+                                                dxp[k] = sx + r.dx
+                                                dyp[k] = sy + r.dy
+                                                cop[k] = r.correlation
+                                                // 🐱 residual beyond a quarter window means the offset prediction failed
+                                                let ok = Double(r.correlation) >= params.minCorrelation && abs(r.dx) < Double(w) / 4 + 1 && abs(r.dy) < Double(w) / 4 + 1
+                                                stp[k] = ok ? .valid : .invalid
+                                                if last {
+                                                    if let sigma { sigX[k] = sigma.x; sigY[k] = sigma.y }
+                                                    widths[k] = r.peakWidth
+                                                }
                                             }
                                         }
                                     }
@@ -394,8 +412,78 @@ public final class PIVEngine: @unchecked Sendable {
             predictor = Self.filledForPrediction(field)
             result = field
         }
+        let gpuLabel = gpu.map { "GPU (\($0.deviceName))" }
+        lastDevice = passesOnGPU == 0 ? "CPU" : passesOnCPU == 0 ? gpuLabel ?? "GPU" : "\(gpuLabel ?? "GPU") + CPU"
         guard let f = result else { return nil }
         return Self.toFullFrame(f, image: a)
+    }
+
+    /// 🐱 One pass with the correlation on the GPU: the CPU places the windows exactly as the CPU pass does (coverage,
+    /// 🐱 predictor, `place`, and the interpolation `CorrelationWork.fill` would choose), the GPU fills, correlates and
+    /// 🐱 finds the peak, and the CPU finishes the sub-pixel fit with the same code as the CPU pass. False (field
+    /// 🐱 untouched) when this pass cannot run on the GPU; the caller then runs it on the CPU.
+    static func gpuPass(_ gpu: MetalCorrelator, _ A: [Float], _ B: [Float], W: Int, H: Int, w: Int, step: Int, cols: Int, rows: Int,
+                        predictor pred: PIVField?, coverage: [Float]?, minCoverage: Float, kernel: CorrelationWork.SubpixelKernel?,
+                        wantSigma: Bool, last: Bool, parameters params: PIVParameters, field: inout PIVField,
+                        sigX: UnsafeMutablePointer<Float>, sigY: UnsafeMutablePointer<Float>, widths: UnsafeMutablePointer<Float>) -> Bool {
+        guard w == MetalCorrelator.windowSize, kernel == nil || kernel == .lanczos4 else { return false }
+        let n = cols * rows
+        var windows: [GPUWindow] = []
+        var grid: [Int] = []
+        var shifts: [Double] = []
+        var masked: [Int] = []
+        windows.reserveCapacity(n); grid.reserveCapacity(n); shifts.reserveCapacity(2 * n)
+        var k = 0
+        while k < n {
+            defer { k += 1 }
+            let j = k / cols, i = k % cols
+            if let cv = coverage {
+                let ci = min(H - 1, j * step + w / 2) * W + min(W - 1, i * step + w / 2)
+                if cv[ci] < minCoverage { masked.append(k); continue }
+            }
+            let cx = Double(i * step) + Double(w) / 2, cy = Double(j * step) + Double(w) / 2
+            var sx = 0.0, sy = 0.0
+            if let p = pred {
+                let d = p.interpolate(x: cx, y: cy)
+                sx = d.dx; sy = d.dy
+            }
+            guard let ax = place(Double(i * step) - sx / 2, shift: sx, window: w, size: W),
+                  let ay = place(Double(j * step) - sy / 2, shift: sy, window: w, size: H) else { continue }
+            let fa = CorrelationWork.fillPlan(x0: ax, y0: ay, n: w, width: W, height: H, kernel: kernel)
+            let fb = CorrelationWork.fillPlan(x0: ax + sx, y0: ay + sy, n: w, width: W, height: H, kernel: kernel)
+            windows.append(GPUWindow(ax: Int32(fa.ix), ay: Int32(fa.iy), bx: Int32(fb.ix), by: Int32(fb.iy),
+                                     fax: fa.fx, fay: fa.fy, fbx: fb.fx, fby: fb.fy, tapsA: Int32(fa.taps), tapsB: Int32(fb.taps)))
+            grid.append(k)
+            shifts.append(sx); shifts.append(sy)
+        }
+        let out: [GPUWindowResult]? = A.withUnsafeBufferPointer { Ap in
+            B.withUnsafeBufferPointer { Bp in
+                windows.withUnsafeBufferPointer { Wp in
+                    gpu.correlate(a: Ap, b: Bp, width: W, height: H, windows: Wp, minContrast: params.minWindowContrast, uncertainty: wantSigma)
+                }
+            }
+        }
+        guard let results = out, results.count == windows.count else { return false }
+        for k in masked { field.status[k] = .masked }
+        var m = 0
+        while m < results.count {
+            defer { m += 1 }
+            let r = results[m]
+            guard r.index >= 0 else { continue }            // 🐱 too little contrast: stays invalid, as on the CPU
+            let k = grid[m], sx = shifts[2 * m], sy = shifts[2 * m + 1]
+            let p = CorrelationWork.peak(index: Int(r.index), n: w, peak: r.peak, xm: r.xm, xp: r.xp, ym: r.ym, yp: r.yp)
+            let correlation = max(0, min(1, p.height))
+            field.dx[k] = sx + p.dx
+            field.dy[k] = sy + p.dy
+            field.correlation[k] = correlation
+            let ok = Double(correlation) >= params.minCorrelation && abs(p.dx) < Double(w) / 4 + 1 && abs(p.dy) < Double(w) / 4 + 1
+            field.status[k] = ok ? .valid : .invalid
+            if last {
+                if wantSigma, r.sigmaX >= 0, r.sigmaY >= 0 { sigX[k] = r.sigmaX; sigY[k] = r.sigmaY }
+                widths[k] = p.widthX > 0 && p.widthY > 0 ? (p.widthX + p.widthY) / 2 : 0
+            }
+        }
+        return true
     }
 
     /// 🐱 Re-measure selected final-pass windows of `field` (full-frame px, any pair geometry) between `a` and `b`, with
@@ -644,6 +732,20 @@ struct CorrelationWork {
         } else {
             b.withUnsafeMutableBufferPointer { dst in Self.copy(src, W, ix, iy, n, integral, w00, w10, w01, w11, dst.baseAddress!) }
         }
+    }
+
+    /// 🐱 What `fill` does for a window at (x0, y0): integer corner, fractions, and taps (1 = integer copy, 2 = bilinear,
+    /// 🐱 kernel taps when the kernel applies and fits inside the image). The GPU pass uses it to fill exactly like `fill`.
+    static func fillPlan(x0: Double, y0: Double, n: Int, width W: Int, height H: Int, kernel: SubpixelKernel?)
+        -> (ix: Int, iy: Int, fx: Float, fy: Float, taps: Int) {
+        let ix = Int(floor(x0)), iy = Int(floor(y0))
+        let fx = Float(x0 - Double(ix)), fy = Float(y0 - Double(iy))
+        let integral = fx < 1e-6 && fy < 1e-6
+        if let k = kernel, !integral {
+            let before = k.taps / 2 - 1, after = k.taps / 2
+            if ix - before >= 0, iy - before >= 0, ix + n + after <= W, iy + n + after <= H { return (ix, iy, fx, fy, k.taps) }
+        }
+        return (ix, iy, fx, fy, integral ? 1 : 2)
     }
 
     /// 🐱 Separable interpolation kernels for sub-pixel window shifting.
@@ -937,32 +1039,8 @@ struct CorrelationWork {
         vDSP_maxvi(p, 1, &peak, &index, vDSP_Length(nn))
         let pr = Int(index) / n, pc = Int(index) % n
         func at(_ r: Int, _ c: Int) -> Int { ((r % n + n) % n) * n + (c % n + n) % n }
-        func sub(_ m: Float, _ c0: Float, _ q: Float) -> Double {
-            if m > 0, c0 > 0, q > 0 {
-                let lm = log(Double(m)), lc = log(Double(c0)), lq = log(Double(q))
-                let den = 2 * (lm - 2 * lc + lq)
-                if abs(den) > 1e-12 { return (lm - lq) / den }
-            }
-            let den = 2 * Double(m - 2 * c0 + q)
-            return abs(den) > 1e-12 ? Double(m - q) / den : 0
-        }
-        // 🐱 Unbiased estimator (Westerweel 1997): a shift s only overlaps n − |s| columns of the window, so the
-        // 🐱 plane is weighted towards zero; dividing the three fitted values by that overlap removes the bias.
-        let ix = pc >= n / 2 ? pc - n : pc, iy = pr >= n / 2 ? pr - n : pr
-        func overlap(_ s: Int) -> Float { Float(n - abs(s)) }
-        let ox = sub(p[at(pr, pc - 1)] / overlap(ix - 1), peak / overlap(ix), p[at(pr, pc + 1)] / overlap(ix + 1))
-        let oy = sub(p[at(pr - 1, pc)] / overlap(iy - 1), peak / overlap(iy), p[at(pr + 1, pc)] / overlap(iy + 1))
-        let shiftX = Double(ix) + max(-1, min(1, ox))
-        let shiftY = Double(iy) + max(-1, min(1, oy))
-        // 🐱 second difference of ln C is −1/σ² for a Gaussian peak (independent of its sub-pixel position)
-        func width(_ m: Float, _ c0: Float, _ q: Float) -> Float {
-            guard m > 0, c0 > 0, q > 0 else { return 0 }
-            let d = log(m) - 2 * log(c0) + log(q)
-            return d < -1e-6 ? (-1 / d).squareRoot() : 0
-        }
-        let wx = width(p[at(pr, pc - 1)], peak, p[at(pr, pc + 1)])
-        let wy = width(p[at(pr - 1, pc)], peak, p[at(pr + 1, pc)])
-        var ratio = Float.infinity
+        var result = Self.peak(index: Int(index), n: n, peak: peak, xm: p[at(pr, pc - 1)], xp: p[at(pr, pc + 1)],
+                               ym: p[at(pr - 1, pc)], yp: p[at(pr + 1, pc)])
         if let s = ratioScratch {
             memcpy(s, p, nn * MemoryLayout<Float>.size)
             var dr = -1
@@ -976,8 +1054,41 @@ struct CorrelationWork {
             }
             var second: Float = 0
             vDSP_maxv(s, 1, &second, vDSP_Length(nn))
-            if second > 0 { ratio = peak / second }
+            if second > 0 { result.ratio = peak / second }
         }
-        return Peak(dx: shiftX, dy: shiftY, height: peak, ratio: ratio, widthX: wx, widthY: wy)
+        return result
+    }
+
+    /// 🐱 Sub-pixel peak from the plane value at its maximum (`index` = r·n + c of a cyclic n×n plane) and the four
+    /// 🐱 cyclic neighbours. Shared by the CPU plane above and the GPU pass (which returns only these five values), so
+    /// 🐱 both give the same vectors. `ratio` is left at infinity.
+    static func peak(index: Int, n: Int, peak: Float, xm: Float, xp: Float, ym: Float, yp: Float) -> Peak {
+        let pr = index / n, pc = index % n
+        func sub(_ m: Float, _ c0: Float, _ q: Float) -> Double {
+            if m > 0, c0 > 0, q > 0 {
+                let lm = log(Double(m)), lc = log(Double(c0)), lq = log(Double(q))
+                let den = 2 * (lm - 2 * lc + lq)
+                if abs(den) > 1e-12 { return (lm - lq) / den }
+            }
+            let den = 2 * Double(m - 2 * c0 + q)
+            return abs(den) > 1e-12 ? Double(m - q) / den : 0
+        }
+        // 🐱 Unbiased estimator (Westerweel 1997): a shift s only overlaps n − |s| columns of the window, so the
+        // 🐱 plane is weighted towards zero; dividing the three fitted values by that overlap removes the bias.
+        let ix = pc >= n / 2 ? pc - n : pc, iy = pr >= n / 2 ? pr - n : pr
+        func overlap(_ s: Int) -> Float { Float(n - abs(s)) }
+        let ox = sub(xm / overlap(ix - 1), peak / overlap(ix), xp / overlap(ix + 1))
+        let oy = sub(ym / overlap(iy - 1), peak / overlap(iy), yp / overlap(iy + 1))
+        let shiftX = Double(ix) + max(-1, min(1, ox))
+        let shiftY = Double(iy) + max(-1, min(1, oy))
+        // 🐱 second difference of ln C is −1/σ² for a Gaussian peak (independent of its sub-pixel position)
+        func width(_ m: Float, _ c0: Float, _ q: Float) -> Float {
+            guard m > 0, c0 > 0, q > 0 else { return 0 }
+            let d = log(m) - 2 * log(c0) + log(q)
+            return d < -1e-6 ? (-1 / d).squareRoot() : 0
+        }
+        let wx = width(xm, peak, xp)
+        let wy = width(ym, peak, yp)
+        return Peak(dx: shiftX, dy: shiftY, height: peak, ratio: .infinity, widthX: wx, widthY: wy)
     }
 }

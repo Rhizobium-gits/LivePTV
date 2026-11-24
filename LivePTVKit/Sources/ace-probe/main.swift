@@ -4,6 +4,7 @@
 // 🐱   swift run -c release ace-probe probe [--host 192.168.42.1] [--port 6666] [--seconds 20] [--out DIR]
 // 🐱                                        [--res 29,43,9] [--low-latency] [--no-secondary]
 // 🐱   swift run -c release ace-probe benchmark [--method piv|ptv] [--windows 64,32] [--width 1920] [--height 1080] [--particles 3000] [--frames 150]
+// 🐱                                            [--gpu 0]   (0 = correlate on the CPU even when a GPU is available)
 // 🐱   swift run -c release ace-probe usb [--seconds 30] [--width 1920 --height 1080] [--out DIR] [--cell 48]
 // 🐱       live analysis from a USB (UVC) camera, e.g. the Ace Pro 2 in Webcam mode
 import AVFoundation
@@ -288,6 +289,7 @@ func benchmark(_ args: Args) async -> Int32 {
     if let b = args.options["background"], let v = ReflectionParameters.Background(rawValue: b) { settings.reflections.background = v }
     if args.options["uncertainty"] == "0" { settings.piv.uncertainty = false }
     if args.options["masks"] == "0" { settings.reflections.glareMasking = false; settings.reflections.saturationMasking = false }
+    if args.options["gpu"] == "0" { settings.piv.useGPU = false }
     settings.pivResolution = .full
     say("interpolation \(settings.piv.windowInterpolation.rawValue), background \(settings.reflections.background.rawValue), uncertainty \(settings.piv.uncertainty), masks \(settings.reflections.glareMasking)")
     say("method: \(settings.method.title)\(settings.method == .piv ? ", windows \(settings.piv.windowSizes), overlap \(Int(settings.piv.overlap * 100)) %, final iterations \(settings.piv.finalIterations)" : "")")
@@ -298,6 +300,7 @@ func benchmark(_ args: Args) async -> Int32 {
     let m = pipeline.metrics
     say(String(format: "analysis per frame (median of last 120): %.1f ms  → max sustainable %.0f fps on this machine",
                m.analysisDurationMs ?? .nan, 1000 / (m.analysisDurationMs ?? .nan)))
+    if let d = m.pivDevice { say("PIV correlation on: \(d)  (--gpu 0 forces the CPU)") }
     if settings.method == .piv {
         say(String(format: "PIV vectors/field %d, valid %.1f %%", m.pivVectors, m.pivValidPercent ?? .nan))
     } else {

@@ -186,6 +186,8 @@ public final class AppModel: ObservableObject {
         overlayPoster = LatestOnMain { o in live.set(o) }
         metricsPoster = LatestOnMain { m in metricsModel.set(m.0, status: m.1) }
         videoDisplay = VideoDisplay()
+        // 🐱 the GPU correlator compiles its shader and checks itself on first use (≈0.3 s): do it off the main thread
+        Task.detached(priority: .utility) { _ = PIVEngine.gpuName }
         if let data = UserDefaults.standard.data(forKey: "analysis.settings"),
            let saved = AnalysisSettings.decodeMerged(data) {
             settings = saved

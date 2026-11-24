@@ -187,6 +187,17 @@ $$
 $C = 1$ means perfect correlation. A window whose intensity standard deviation is below 1.5 grey levels carries no
 pattern and is invalid.
 
+**Where it runs.** The 32-px passes are computed on the GPU when the device has one of Apple GPU family 7 or later
+(Mac family 2) that passes a self-check at start-up (a particle image with a known integer shift, for each window
+fill); other window sizes, older GPUs and the setting *Correlate on the GPU* off use the CPU (Accelerate). One GPU
+threadgroup processes one window pair: window fill (integer copy, bilinear or Lanczos-4, chosen per window by the
+same rule as on the CPU), mean and σ, the single-vector uncertainty of §8, the 2-D FFT of $Z = A' + iB'$ in registers
+(32-lane SIMD groups), the cross power and the inverse FFT, and the first index of the maximum. The GPU returns the
+peak value and its four cyclic neighbours, and the sub-pixel fit of §7.3 runs on the CPU in double precision with the
+same code as the CPU path. Fast math is off. On the same frames the two paths give identical statuses, vectors within
+6·10⁻⁷ px and uncertainties within 0.01 % (`GPUCorrelationTests`). The window placement, validation and replacement
+are shared.
+
 ### 7.2 Multi-pass with symmetric sub-pixel window offset
 
 The default passes are 64 px then 32 px, with two final iterations; the final pass has 50 % overlap. Each pass
@@ -506,11 +517,14 @@ and the end-of-measurement evaluation:
 | Camera shake (`EvaluationTests`) | slow vortex kept; shake removed; residual 0.069 px with background removal |
 | Ensemble correlation (`EnsembleTests`, `EvaluationTests`) | 8.5 % vs 11.8 % vector average on faint sparse vortex; 99 % valid |
 | Brownian diffusion (`SessionStatisticsTests`, `EvaluationTests`) | D within 4 % |
+| GPU vs CPU correlation (`GPUCorrelationTests`) | identical statuses; vectors within 6·10⁻⁷ px; σ within 0.01 % |
 
 Speed (Apple M3, 1280×720, PIV 64→32 px, 50 % overlap, release build): 15.1 ms per frame with bilinear shifting
 only; 22.0 ms with Lanczos; 24.3 ms with per-vector uncertainty; 26.6 ms with background removal and masks (38 fps).
 An unoptimised build (as in Swift Playgrounds) takes 76 ms. The app lowers the analysis resolution automatically
-when the live analysis falls below about 8 fps.
+when the live analysis falls below about 8 fps. With the 32-px passes on the GPU (Apple M4, release build, default
+settings with background removal, masks and uncertainty): 1920×1080 42.0 ms per frame vs 56.1 ms CPU only, 1280×720
+17.0 vs 23.3 ms. The 64-px predictor pass, pre-processing, background removal and masks still run on the CPU.
 
 ## 18. Limitations and recommendations
 
