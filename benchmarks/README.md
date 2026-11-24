@@ -17,12 +17,13 @@ app pipeline. The numbers in `results/` are the ones quoted in the README.
 | `python/synthetic_brownian_compare.py` | The same estimators on synthetic Brownian particles with known D |
 | `python/ptv_timing.py` | PTV speed: detection + tracking of ~20,000 particles per 1920 × 1080 frame, LivePTV vs trackpy |
 | `python/make_readme_figs.py` | The README figures (`docs/images`) |
-| `results/` | JSON / CSV results (`v07/`: the same experiments with LivePTV 0.7) |
+| `python/make_readme_tables.py` | The README's *Experiments* section, written from `results/` between its markers |
+| `results/` | JSON / CSV results (`v07/`: the same experiments with LivePTV 0.7; `camera_motion.json` and `showcase_summary.json` hold numbers printed by the tests, with their source) |
 | `fetch_data.sh` | Downloads trackpy's `bulk_water` sample and encodes it as a ProRes video (not redistributed here) |
 
 The example sessions come from `LivePTVKit/Tests/PipelineTests/ShowcaseTests.swift`: synthetic scenes with an exact
-flow (vortex pair, Taylor–Green array, channel flow, faint tracers with ensemble correlation, camera shake, Brownian
-PTV) and the real `bulk_water` video, each run through `AnalysisPipeline` and `ExperimentRecorder` exactly as in the
+flow (vortex pair, Taylor–Green array, channel flow, faint tracers with ensemble correlation, camera shake, a stand
+swaying about its foot, Brownian PTV) and the real `bulk_water` video, each run through `AnalysisPipeline` and `ExperimentRecorder` exactly as in the
 app. They are skipped in normal test runs.
 
 ## Reproducing
@@ -47,6 +48,7 @@ cd python
 ../.venv/bin/python synthetic_brownian_compare.py
 ../.venv/bin/python ptv_timing.py                           # idle machine
 ../.venv/bin/python make_readme_figs.py
+../.venv/bin/python make_readme_tables.py
 ```
 
 ## What is and is not compared

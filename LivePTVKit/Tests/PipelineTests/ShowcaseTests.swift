@@ -155,6 +155,30 @@ struct ShowcaseTests {
                      a.rel, b.rel, try borderStd("shake_compensated"), try borderStd("shake_uncompensated")))
     }
 
+    /// 🐱 A camera on a stand swaying about its foot, 900 px below the picture (rotation 0.3 mrad RMS per frame), over a
+    /// 🐱 steady vortex with a static border: automatic compensation, and none.
+    @Test func standSway() async throws {
+        var cfg = TestVideoSource.Configuration()
+        cfg.realTime = false
+        cfg.frameLimit = 150
+        cfg.particleCount = 7000
+        cfg.particleSigma = 1.0
+        cfg.flow = .lambOseen(circulation: 40_000, coreRadius: 50)
+        cfg.staticMarginFraction = 0.18
+        cfg.shakePivot = (x: 320, y: 480 + 900)
+        cfg.shakeRotationStd = 0.0003
+        var on = pivSettings()
+        on.shake.enabled = true
+        on.evaluation.minSamplesPerCell = 20
+        _ = try await run(cfg, on, label: "camera on a stand swaying about its foot: compensated (synthetic)", scene: "stand_sway_compensated")
+        var off = on
+        off.shake.enabled = false
+        _ = try await run(cfg, off, label: "camera on a stand swaying about its foot: not compensated (synthetic)", scene: "stand_sway_uncompensated")
+        let a = try error("stand_sway_compensated", cfg: cfg, margin: 0.18 * 640 + 40)
+        let b = try error("stand_sway_uncompensated", cfg: cfg, margin: 0.18 * 640 + 40)
+        print(String(format: "SHOWCASE stand_sway: mean field rel rms compensated %.4f, uncompensated %.4f", a.rel, b.rel))
+    }
+
     /// 🐱 Real microscopy video (trackpy's `bulk_water` sample: 1 µm latex spheres diffusing in water, 24 fps,
     /// 🐱 2.85 px/µm, dark particles on a bright background), given as a video file in $LIVEPTV_REAL_BROWNIAN.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LIVEPTV_REAL_BROWNIAN"] != nil, "set LIVEPTV_REAL_BROWNIAN"))

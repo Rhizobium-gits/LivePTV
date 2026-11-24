@@ -14,6 +14,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker
+import matplotlib.patches
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -220,6 +221,93 @@ def ptv():
     save(fig, "bench_ptv.png")
 
 
+def subpixel():
+    d = load("piv_e1.json")
+    fig, axes = plt.subplots(1, 2, figsize=(9.6, 3.6), sharey=True)
+    for ax, dt in zip(axes, ("1.0", "2.5")):
+        rows = d[dt]
+        fr = [s["frac"] for s in rows["LivePTV 64→32 (Lanczos, default)"]]
+        mk(ax, fr, [s["bias_x"] for s in rows["LivePTV 64→32 (bilinear)"]], BLUE, "--", "LivePTV, bilinear option")
+        mk(ax, fr, [s["bias_x"] for s in rows["LivePTV 64→32 (shift, 0.7 method)"]], BLUE, ":", "LivePTV 0.7")
+        mk(ax, fr, [s["bias_x"] for s in rows["LivePTV 64→32 (Lanczos, default)"]], BLUE, "-", "LivePTV 0.8")
+        mk(ax, fr, [s["bias_x"] for s in rows["OpenPIV 64→32 (deform)"]], ORANGE, "-", "OpenPIV 0.26")
+        ax.axhline(0, color=INK2, lw=0.8)
+        ax.set_title(f"particle images {dt} px across")
+        ax.set_xlabel("fractional part of the displacement (px)")
+    axes[0].set_ylabel("systematic error (px)")
+    axes[1].legend(fontsize=8, loc="upper right")
+    fig.suptitle("Sub-pixel bias in uniform flow (peak locking)", fontweight="bold", color=INK, fontsize=11)
+    fig.tight_layout()
+    save(fig, "bench_subpixel.png")
+
+
+def uncertainty():
+    """Per-vector uncertainty (correlation statistics) against the actual error, every E5 condition."""
+    fig, ax = plt.subplots(figsize=(5.2, 4.4))
+    for src, key, col, marker, lab in (("v07/piv_e5.json", "LivePTV 64→32 (Lanczos, default)", "#9ec5f4", "s", "LivePTV 0.7"),
+                                       ("piv_e5.json", "LivePTV 64→32 (Lanczos, default)", BLUE, "o", "LivePTV 0.8")):
+        d = load(src)
+        xs, ys = [], []
+        for sweep in d.values():
+            for r in sweep[key]:
+                if r.get("sigma_pred_rms"):
+                    xs.append(r["sigma_actual_rms"]); ys.append(r["sigma_pred_rms"])
+        ax.loglog(xs, ys, marker, color=col, markersize=7, markeredgecolor=SURFACE, markeredgewidth=1.2, label=lab, linestyle="none")
+    lim = np.array([0.005, 0.2])
+    ax.loglog(lim, lim, color=INK2, lw=1, label="predicted = actual")
+    ax.fill_between(lim, lim / 1.3, lim * 1.3, color=GRID, alpha=0.6, lw=0, label="± 30 %")
+    ax.set_xlim(*lim); ax.set_ylim(*lim)
+    ax.set_xlabel("actual RMS error (px)"); ax.set_ylabel("predicted uncertainty (px)")
+    ax.set_title("Per-vector uncertainty, 13 conditions")
+    ax.legend(fontsize=8, loc="upper left")
+    fig.tight_layout()
+    save(fig, "bench_uncertainty.png")
+
+
+def camera_motion():
+    import pandas as pd
+    base = os.path.join(ROOT, "showcase")
+    fig = plt.figure(figsize=(12.6, 4.2))
+    vmax = 0
+    maps = []
+    for name in ("stand_sway_uncompensated", "stand_sway_compensated"):
+        m = pd.read_csv(os.path.join(base, name, "mean_field.csv"))
+        m = m[m.valid == 1]
+        sd = np.sqrt((m.std_u_px_s ** 2 + m.std_v_px_s ** 2) / 2)
+        xs, ys = np.unique(m.x_px), np.unique(m.y_px)
+        M = np.full((len(ys), len(xs)), np.nan)
+        M[np.searchsorted(ys, m.y_px), np.searchsorted(xs, m.x_px)] = sd
+        maps.append((xs, ys, M))
+        vmax = max(vmax, np.nanpercentile(M, 98))
+    for k, (title, (xs, ys, M)) in enumerate(zip(("Not compensated", "Automatic compensation"), maps)):
+        ax = fig.add_axes([0.03 + k * 0.27, 0.12, 0.24, 0.7])
+        im = ax.imshow(M, extent=(xs[0] - 8, xs[-1] + 8, ys[-1] + 8, ys[0] - 8), cmap="Blues", vmin=0, vmax=vmax)
+        ax.set_title(f"{title}\nmedian {np.nanmedian(M):.1f} px/s", fontsize=10)
+        ax.set_xticks([]); ax.set_yticks([]); ax.grid(False)
+    cax = fig.add_axes([0.575, 0.2, 0.008, 0.55])
+    cb = fig.colorbar(im, cax=cax); cb.outline.set_visible(False)
+    cb.set_label("velocity fluctuation (px/s)", fontsize=8.5)
+    ax = fig.add_axes([0.68, 0.12, 0.3, 0.7])
+    fr = pd.read_csv(os.path.join(base, "stand_sway_compensated", "frames.csv"))
+    pv = fr.dropna(subset=["shake_pivot_x_px", "shake_pivot_y_px"])
+    ax.plot(pv.shake_pivot_x_px, pv.shake_pivot_y_px, "o", color="#9ec5f4", markersize=3.5, label="turning point of single pairs")
+    ev = json.load(open(os.path.join(base, "stand_sway_compensated", "evaluation.json")))["cameraMotion"]
+    ax.plot([ev["pivotXPx"]], [ev["pivotYPx"]], "o", color=BLUE, markersize=10, markeredgecolor=SURFACE, markeredgewidth=1.5,
+            label=f"learned pivot (R² {ev['pivotRSquared']:.3f})")
+    ax.plot([320], [1380], "+", color=INK, markersize=14, mew=1.6, label="true pivot (foot of the stand)")
+    ax.add_patch(matplotlib.patches.Rectangle((0, 0), 640, 480, fill=False, ec=INK2, lw=1.2))
+    ax.text(320, 240, "picture", ha="center", va="center", color=INK2, fontsize=9)
+    ax.set_xlim(-560, 1200); ax.set_ylim(1650, -150); ax.set_aspect("equal")
+    ax.set_xlabel("x (px)"); ax.set_ylabel("y (px)")
+    ax.set_title("Where the motion turns", fontsize=10)
+    ax.legend(fontsize=7.5, loc="upper left", bbox_to_anchor=(0.0, 0.6), frameon=True, facecolor=SURFACE, edgecolor=GRID, framealpha=1)
+    fig.suptitle("Camera on a stand swaying about its foot, 900 px below the picture: steady vortex, static border",
+                 fontweight="bold", color=INK, fontsize=11)
+    fig.savefig(os.path.join(OUT, "bench_camera_motion.png"), dpi=130)
+    plt.close(fig)
+    print("wrote bench_camera_motion.png", file=sys.stderr)
+
+
 GALLERY = [  # (scene, file in the session folder, README name)
     ("bottle", "figure_summary.png", "app_bottle_summary.png"),
     ("bottle", "figure_quality.png", "app_bottle_quality.png"),
@@ -246,4 +334,5 @@ if __name__ == "__main__":
     which = sys.argv[1:] or ["resolution", "vortex", "robust", "speed", "real", "gallery"]
     for w in which:
         {"resolution": resolution, "vortex": vortex_maps, "robust": robustness, "speed": speed,
-         "real": real_piv, "gallery": gallery, "ptv": ptv}[w]()
+         "real": real_piv, "gallery": gallery, "ptv": ptv, "subpixel": subpixel, "uncertainty": uncertainty,
+         "camera": camera_motion}[w]()

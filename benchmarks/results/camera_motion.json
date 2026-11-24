@@ -1,0 +1,107 @@
+{
+ "source": "printed by LivePTVKit/Tests/PipelineTests/CameraMotionPipelineTests.swift and Tests/PTVCoreTests/CameraMotionTests.swift (2026-11-25); stand_sway_* from ShowcaseTests.standSway",
+ "pipeline": {
+  "stand_sway_piv": {
+   "pivot_truth_px": [
+    320,
+    1380
+   ],
+   "rotation_rms_rad": 0.0003,
+   "border_std_px_s": {
+    "uncompensated": 13.96,
+    "automatic": 1.2
+   },
+   "flow_std_px_s": {
+    "uncompensated": 5.32,
+    "automatic": 1.13
+   },
+   "pivot_found_px": [
+    311,
+    1357
+   ],
+   "pivot_r2": 1.0,
+   "models": {
+    "pivot": 74,
+    "similarity": 20
+   }
+  },
+  "stand_sway_ptv": {
+   "velocity_rms_error_px_s": {
+    "uncompensated": 10.52,
+    "automatic": 3.55
+   },
+   "samples": 19751,
+   "pivot_found_px": [
+    310,
+    1362
+   ]
+  },
+  "shear_keystone_piv": {
+   "border_std_px_s": {
+    "similarity": 4.87,
+    "automatic": 1.46
+   },
+   "flow_std_px_s": {
+    "similarity": 3.56,
+    "automatic": 0.88
+   },
+   "models": {
+    "perspective": 94
+   }
+  }
+ },
+ "unit": {
+  "pivot_1500px_below": {
+   "learned_px": [
+    217,
+    1644
+   ],
+   "truth_px": [
+    200,
+    1652
+   ],
+   "r2": 1.0,
+   "worst_flow_error_px": 0.207
+  },
+  "one_sided_background": {
+   "models": {
+    "translation": 11,
+    "similarity": 11,
+    "pivot": 23
+   },
+   "worst_flow_error_px": 0.164
+  },
+  "shear_keystone": {
+   "worst_flow_error_px": {
+    "automatic": 0.193,
+    "perspective": 0.193,
+    "similarity": 0.643
+   }
+  },
+  "pure_shift_noise_0p05px": {
+   "models": {
+    "translation": 65
+   }
+  }
+ },
+ "showcase_stand_sway": {
+  "median_fluctuation_px_s": {
+   "uncompensated": 12.9,
+   "automatic": 1.1
+  },
+  "pivot_px": [
+   312,
+   1361
+  ],
+  "pivot_r2": 0.999,
+  "models": {
+   "pivot": 104,
+   "similarity": 29,
+   "affine": 1
+  },
+  "mean_field_rel_rms": {
+   "uncompensated": 0.0094,
+   "automatic": 0.0124
+  }
+ }
+}
