@@ -145,6 +145,12 @@ import Testing
         // 🐱 on a busy machine (CI) some frames are overwritten between polls: count resumption, not polling speed.
         #expect(more.count >= 5)
         #expect(source.statistics().reconnects >= 1)
+        // 🐱 the mock streams as soon as it gets START_LIVE_STREAM, so frames can arrive before the source has handled the
+        // 🐱 acknowledgement and set `.streaming` (seen on a busy CI runner): wait for the state, do not sample it once
+        let streamingDeadline = HostClock.now() + 3
+        while source.getConnectionState() != .streaming, HostClock.now() < streamingDeadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
         #expect(source.getConnectionState() == .streaming)
         await source.disconnect()
     }
