@@ -1,0 +1,7 @@
+.venv/
+data/
+showcase/
+results/figs/
+harness/.build/
+__pycache__/
+*.log
