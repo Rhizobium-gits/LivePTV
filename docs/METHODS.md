@@ -423,17 +423,28 @@ shift $-\theta R_{90}(\mathbf{q}-\mathbf{c})$.
 windows with residuals above 3 robust σ + 0.05 px; the chosen model is fitted, residuals are rejected again, and it is
 refitted. A model is only used if the static windows determine it: the smallest eigenvalue of the column-normalised
 normal matrix must be at least 0.02 (with static windows on one side of the picture only, the affine and perspective
-terms are not determined and are never chosen). In automatic mode the determinable model with the lowest Bayesian
+terms are not determined and are never chosen), and the fit must stay precise out to the field's corners: the
+leverage $\mathbf{b}^\top N^{-1}\mathbf{b}$ of each corner ($\mathbf{b}$ the model's basis there, $N$ the normal matrix),
+i.e. the variance of the fitted correction there in units of one window's measurement variance, must be at most 0.25.
+A few clustered static windows determine a rotation, zoom or keystone well locally but extrapolate it across the frame
+with a long lever arm; this condition makes such pairs fall back to a simpler model (found with a real camera at half
+resolution, where ~40 static windows gave corrections of 10–500 px at the frame edge without it). In automatic mode the determinable model with the lowest Bayesian
 information criterion, $N\ln(\mathrm{RSS}/N + 10^{-4}) + p\ln N$ ($N$ = 2 × windows, $p$ parameters), is chosen per
-pair; a requested model the background cannot determine falls back to the richest simpler one it can.
+pair; a requested model the background cannot determine falls back to the richest simpler one it can. If the static
+windows still disagree by more than 1/16 of the final window RMS after the fit (2 px for 32-px windows; a good real
+background leaves about 0.1–0.2 px), they are not one camera motion, and nothing is removed from that pair (reported
+as "static background inconsistent", with a warning in the evaluation when it affects more than 10 % of the pairs).
 
 **Pivot.** For every pair with a rotation, the shift a rotation and zoom about a point $\mathbf{q}$ would cause is
 $\mathbf{t} = -M(\mathbf{q}-\mathbf{c})$, $M = \begin{pmatrix}\sigma & \theta\\ -\theta & \sigma\end{pmatrix}$. Least squares over
 the session gives $\mathbf{q} = \mathbf{c} - \sum M^\top\mathbf{t} / \sum(\sigma^2+\theta^2)$ and the share $R^2$ of the
-fitted shifts it explains. Once at least 10 pairs moved the frame corners by ≥ 0.05 px RMS and $R^2 \ge 0.8$, the
-point is reported (live status, evaluation, methods paragraph) and the 2-parameter pivot model becomes a candidate.
+fitted shifts it explains. Once at least 10 pairs moved the frame corners by ≥ 0.05 px RMS, the fitted rotations
+and zooms are at least twice their noise ($\sum(\sigma^2+\theta^2) \ge 4\sum \mathrm{var}_\text{noise}$, the noise
+variance of each pair from its fit) and $R^2 \ge 0.8$, the point is reported (live status, evaluation, methods paragraph) and the 2-parameter pivot model becomes a candidate.
 It stays well determined when the static background is small or on one side, where the 4-parameter similarity
-extrapolates poorly. Each pair's own turning point, $\mathbf{c} - M^{-1}\mathbf{t}$, is recorded in `frames.csv`.
+extrapolates poorly. The noise condition matters: rotations fitted to pure noise from a cluster of static windows are
+rotations about that cluster, which pass the $R^2$ test and would put a "pivot" on it (seen with a still real camera).
+Each pair's own turning point, $\mathbf{c} - M^{-1}\mathbf{t}$, is recorded in `frames.csv`.
 
 A window counts as static when its time-averaged displacement per frame is zero within 3 standard errors and below
 0.15 px/frame. Shake goes back and forth, so its average is zero; a slow steady flow has a mean many standard errors
@@ -449,17 +460,21 @@ accumulated per frame, and every particle step has the camera motion between its
 position (steps across a missed frame included).
 
 **Interaction with background removal.** The running mean also removes the static texture this fit relies on.
-Therefore the static windows are measured again on the **raw** frames, with one Lanczos-shifted pass and the
-current vector as offset. They keep those raw measurements as their vectors.
+Therefore the static windows are measured again on the **raw** frames, with one Lanczos-shifted pass. They keep those
+raw measurements as their vectors. The window offset is the median of the static windows' current vectors, the same
+for all of them: after background removal a static window's own vector is noise (a still camera leaves only sensor
+noise there), and an offset by noise larger than a quarter window puts the true peak out of reach. Using each
+window's own vector, as before, left the static areas with a temporal scatter of 31 px/s
+(see the real-camera table below).
 
 Measured (`CameraMotionTests`, `CameraMotionPipelineTests`; synthetic camera through the full pipeline, steady vortex,
 static border):
 
 | Case | Without | With |
 | --- | --- | --- |
-| Stand swaying about a point 900 px below the picture (0.3 mrad RMS): velocity fluctuation of the static border / of the flow | 13.96 / 5.32 px/s | 1.20 / 1.13 px/s; pivot found at (311, 1357) px, truth (320, 1380) |
-| Same, PTV: RMS error of particle velocities | 10.52 px/s | 3.55 px/s |
-| Rolling-shutter shear + keystone + shift: static border / flow | 4.87 / 3.56 px/s (similarity model) | 1.46 / 0.88 px/s (automatic: perspective) |
+| Stand swaying about a point 900 px below the picture (0.3 mrad RMS): velocity fluctuation of the static border / of the flow | 13.96 / 5.32 px/s | 1.17 / 1.13 px/s; pivot found at (315, 1367) px, truth (320, 1380) |
+| Same, PTV: RMS error of particle velocities | 10.54 px/s | 2.54 px/s |
+| Rolling-shutter shear + keystone + shift: static border / flow | 4.82 / 3.57 px/s (similarity model) | 1.45 / 0.88 px/s (automatic: perspective) |
 | Pure shift with 0.05-px noise: pairs fitted with affine or perspective | | 0 of 65 (no over-fitting) |
 
 | Background | Rigid-fit residual | Field error |
@@ -467,6 +482,16 @@ static border):
 | none | 0.015 px | 4.4 % |
 | running mean, without re-measurement | 0.127 px | 5.8 % |
 | running mean, with re-measurement | 0.069 px | 4.7 % |
+
+Real camera, still scene (15 s from an Insta360 Ace Pro 2 standing on a desk, 1920 × 1080 at 30 fps, replayed with
+`ace-probe file`; truth: nothing moves). "Before" is the same code without the re-measurement offset, the corner-leverage
+condition, the consistency check and the pivot noise condition described above.
+
+| | ½ resolution, before | ½ resolution, now | full resolution, before | full resolution, now |
+| --- | --- | --- | --- | --- |
+| Correction applied at the frame edge: median / p95 / max | 0.94 / 18.6 / 516 px | 0.041 / 0.27 / 1.2 px | 0.010 / 0.045 / 1.38 px | 0.007 / 0.033 / 0.18 px |
+| Temporal scatter of the mean field (median over cells) | 11.8 px/s | 0.81 px/s | 30.8 px/s | 1.28 px/s |
+| Pairs corrected with a "pivot" (there is none) | 0 of 416 | 0 of 416 | 221 of 416 | 0 of 416 |
 
 ## 11. Refraction by the container
 
@@ -662,7 +687,8 @@ and the end-of-measurement evaluation:
 | Window-shift interpolation bias (`WindowShiftInterpolationTests`) | bilinear 0.053 px, Lanczos-4 0.002 px |
 | Container plumbing, scale and magnification (`EvaluationTests.containerCorrectionsEndToEnd`) | ℓ = 0.1 mm/px exact; centre speed within 0.3 % of 45 × 0.7502 |
 | Camera shake (`EvaluationTests`) | slow vortex kept; shake removed; residual 0.069 px with background removal |
-| Camera motion beyond shift (`CameraMotionTests`, `CameraMotionPipelineTests`) | stand sway about a point 900 px below the picture: border fluctuation 13.96 → 1.20 px/s, pivot within 25 px; PTV velocity error 10.52 → 3.55 px/s; shear + keystone: 4.87 → 1.46 px/s vs similarity |
+| Camera motion beyond shift (`CameraMotionTests`, `CameraMotionPipelineTests`) | stand sway about a point 900 px below the picture: border fluctuation 13.96 → 1.17 px/s, pivot within 15 px; PTV velocity error 10.54 → 2.54 px/s; shear + keystone: 4.82 → 1.45 px/s vs similarity |
+| Real camera (Insta360 Ace Pro 2, USB, 1080p30; `benchmarks/python/real_camera_compare.py`, not in the test suite) | known motion on real frames: median error 0.089 px (OpenPIV 0.195, OpenCV DIS 0.272, Farnebäck 0.429 px); still camera: camera-motion correction ≤ 0.18 px at full resolution, ≤ 1.2 px at ½ |
 | Ensemble correlation (`EnsembleTests`, `EvaluationTests`) | 8.5 % vs 11.8 % vector average on faint sparse vortex; 99 % valid |
 | Brownian diffusion (`SessionStatisticsTests`, `EvaluationTests`, `PTVAccuracyTests`) | D within 4 %; with background removal on +5 % (was +35 %) |
 | PTV detection and tracking (`PTVAccuracyTests`, `AssignmentSolverTests`) | dense image recall 1.00 (was 0.44); no detections on pure noise; dense fast flow links 0.97 / 0.96 (was 0.29 / 0.19) |

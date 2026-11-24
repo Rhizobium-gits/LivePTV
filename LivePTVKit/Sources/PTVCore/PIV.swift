@@ -535,33 +535,53 @@ public final class PIVEngine: @unchecked Sendable {
         return true
     }
 
-    /// 🐱 Re-measure selected final-pass windows of `field` (full-frame px, any pair geometry) between `a` and `b`, with
-    /// 🐱 the field's own displacement as window offset (one Lanczos-shifted pass). Used to measure camera motion on raw
-    /// 🐱 frames in static windows, whose texture background subtraction would otherwise have removed.
-    public func measureWindows(a: PIVImage, b: PIVImage, field f: PIVField, indices: [Int]) -> [Int: (dx: Double, dy: Double)] {
+    /// 🐱 Re-measure selected final-pass windows of `field` (full-frame px, any pair geometry) between `a` and `b` (one
+    /// 🐱 Lanczos-shifted pass). Used to measure camera motion on raw frames in static windows, whose texture background
+    /// 🐱 subtraction would otherwise have removed. The window offset is `predictor` (full-frame px) for every window when
+    /// 🐱 given, else the field's own displacement. Pass a predictor for static windows: after background subtraction their
+    /// 🐱 own vectors are noise (a still camera leaves nothing but sensor noise there), and an offset by noise larger than a
+    /// 🐱 quarter window puts the true peak out of reach (seen on a real 1080p camera at 1/2 resolution).
+    public func measureWindows(a: PIVImage, b: PIVImage, field f: PIVField, indices: [Int],
+                               predictor: (dx: Double, dy: Double)? = nil) -> [Int: (dx: Double, dy: Double)] {
         guard a.width == b.width, a.height == b.height, !indices.isEmpty else { return [:] }
         let s = Double(max(1, a.scale))
         let w = Self.effectiveWindow(Int((Double(f.windowSize) / s).rounded()))
         guard a.width > w + 8, a.height > w + 8 else { return [:] }
         let setup = fftSetup(maxLog2: max(setupLog2, Int(log2(Double(w)))))
-        var work = CorrelationWork(size: w)
-        var out: [Int: (dx: Double, dy: Double)] = [:]
-        a.pixels.withUnsafeBufferPointer { Ap in
-            b.pixels.withUnsafeBufferPointer { Bp in
-                for k in indices where k >= 0 && k < f.count {
-                    // 🐱 full-frame → analysed px
-                    let cx = (f.x(k) - Double(a.originX) + 0.5) / s - 0.5, cy = (f.y(k) - Double(a.originY) + 0.5) / s - 0.5
-                    let sx = f.dx[k] / s, sy = f.dy[k] / s
-                    guard let ax = Self.place(cx - Double(w - 1) / 2 - sx / 2, shift: sx, window: w, size: a.width),
-                          let ay = Self.place(cy - Double(w - 1) / 2 - sy / 2, shift: sy, window: w, size: a.height) else { continue }
-                    work.fill(Ap.baseAddress!, a.width, x0: ax, y0: ay, into: true, kernel: .lanczos4, height: a.height)
-                    work.fill(Bp.baseAddress!, a.width, x0: ax + sx, y0: ay + sy, into: false, kernel: .lanczos4, height: a.height)
-                    guard let r = work.correlate(setup: setup, minContrast: parameters.minWindowContrast),
-                          Double(r.correlation) >= parameters.minCorrelation, abs(r.dx) < Double(w) / 4, abs(r.dy) < Double(w) / 4 else { continue }
-                    out[k] = ((sx + r.dx) * s, (sy + r.dy) * s)
+        let list = indices.filter { $0 >= 0 && $0 < f.count }
+        guard !list.isEmpty else { return [:] }
+        let minContrast = parameters.minWindowContrast, minCorrelation = parameters.minCorrelation
+        // 🐱 in parallel chunks (each with its own scratch): with a still camera most windows are static, and one thread
+        // 🐱 took ~25 ms per 1080p pair
+        let chunks = min(list.count, 4 * max(1, ProcessInfo.processInfo.activeProcessorCount))
+        var parts = [[(k: Int, dx: Double, dy: Double)]](repeating: [], count: chunks)
+        parts.withUnsafeMutableBufferPointer { P in
+            a.pixels.withUnsafeBufferPointer { Ap in
+                b.pixels.withUnsafeBufferPointer { Bp in
+                    DispatchQueue.concurrentPerform(iterations: chunks) { c in
+                        var work = CorrelationWork(size: w)
+                        var local: [(k: Int, dx: Double, dy: Double)] = []
+                        for n in (c * list.count / chunks)..<((c + 1) * list.count / chunks) {
+                            let k = list[n]
+                            // 🐱 full-frame → analysed px
+                            let cx = (f.x(k) - Double(a.originX) + 0.5) / s - 0.5, cy = (f.y(k) - Double(a.originY) + 0.5) / s - 0.5
+                            let sx = (predictor?.dx ?? f.dx[k]) / s, sy = (predictor?.dy ?? f.dy[k]) / s
+                            guard let ax = Self.place(cx - Double(w - 1) / 2 - sx / 2, shift: sx, window: w, size: a.width),
+                                  let ay = Self.place(cy - Double(w - 1) / 2 - sy / 2, shift: sy, window: w, size: a.height) else { continue }
+                            work.fill(Ap.baseAddress!, a.width, x0: ax, y0: ay, into: true, kernel: .lanczos4, height: a.height)
+                            work.fill(Bp.baseAddress!, a.width, x0: ax + sx, y0: ay + sy, into: false, kernel: .lanczos4, height: a.height)
+                            guard let r = work.correlate(setup: setup, minContrast: minContrast),
+                                  Double(r.correlation) >= minCorrelation, abs(r.dx) < Double(w) / 4, abs(r.dy) < Double(w) / 4 else { continue }
+                            local.append((k, (sx + r.dx) * s, (sy + r.dy) * s))
+                        }
+                        P[c] = local
+                    }
                 }
             }
         }
+        var out: [Int: (dx: Double, dy: Double)] = [:]
+        out.reserveCapacity(list.count)
+        for part in parts { for e in part { out[e.k] = (e.dx, e.dy) } }
         return out
     }
 

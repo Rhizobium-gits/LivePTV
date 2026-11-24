@@ -126,4 +126,26 @@ import Testing
         let later = avg.snapshot(at: 1.32)
         #expect(later.cells[0].count == 3)
     }
+
+    /// 🐱 A field is dated at its pair's mid time, half a pair spacing back. With 1-s pairs and a 0.25-s window that is
+    /// 🐱 older than the window, and the live display used to go empty; the newest field is now always shown.
+    @Test func averagerKeepsTheNewestFieldOfALongPair() {
+        let cols = 4, rows = 3, n = cols * rows
+        let grid = GridGeometry(originX: 0, originY: 0, cellSize: 16, columns: cols, rows: rows)
+        var fp = FieldParameters()
+        fp.window = 0.25
+        fp.minSamples = 1
+        let avg = PIVFieldAverager(grid: grid, parameters: fp)
+        func field(_ dx: Double) -> PIVField {
+            PIVField(columns: cols, rows: rows, originX: 8, originY: 8, step: 16, windowSize: 32,
+                     dx: .init(repeating: dx, count: n), dy: .init(repeating: 0, count: n), dt: 1.0,
+                     status: .init(repeating: .valid, count: n), correlation: .init(repeating: 1, count: n))
+        }
+        avg.add(field(2), time: 9.5)                       // 🐱 pair 9.0 … 10.0
+        let s1 = avg.snapshot(at: 10.0)
+        #expect(s1.cells.allSatisfy { $0.valid && $0.count == 1 && abs($0.u - 2) < 1e-9 })
+        avg.add(field(4), time: 9.533)                     // 🐱 next frame: the older field leaves, the newest stays
+        let s2 = avg.snapshot(at: 10.033)
+        #expect(s2.cells.allSatisfy { $0.valid && $0.count == 1 && abs($0.u - 4) < 1e-9 })
+    }
 }

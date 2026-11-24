@@ -25,6 +25,12 @@ public final class ExternalCameraSource: NSObject, CameraVideoSource, AVCaptureV
     private let preferredDeviceID: String?
     private let preferredSize: (width: Int, height: Int)?
     private var chosenFormat: AVCaptureDevice.Format?
+    /// 🐱 Start-up watchdog (see `watchFirstFrames`), and frames swallowed while it restarts the stream.
+    private var watchdog: Task<Void, Never>?
+    private var _restarting = false
+    private var _restartFrames = 0
+    /// 🐱 Seconds without a first frame before the stream is restarted once through another format.
+    public var firstFrameTimeout: Double = 3
 
     /// 🐱 External cameras currently attached.
     public static func availableDevices() -> [AVCaptureDevice] {
@@ -137,24 +143,82 @@ public final class ExternalCameraSource: NSObject, CameraVideoSource, AVCaptureV
         mailbox.reset()
         index = 0
         lock.withLock { _stats = SourceStatistics() }
-        outputQueue.sync {
-            // 🐱 The device must stay locked while the session starts; otherwise macOS replaces the chosen format with
-            // 🐱 the session preset (observed with the Ace Pro 2: zero frames delivered).
-            if let dev = device, let format = chosenFormat, (try? dev.lockForConfiguration()) != nil {
-                dev.activeFormat = format
-                if let range = format.videoSupportedFrameRateRanges.max(by: { $0.maxFrameRate < $1.maxFrameRate }) {
-                    dev.activeVideoMinFrameDuration = range.minFrameDuration
-                }
-                session.startRunning()
-                dev.unlockForConfiguration()
-            } else {
-                session.startRunning()
-            }
+        // 🐱 The device must stay locked while the session starts; otherwise macOS replaces the chosen format with
+        // 🐱 the session preset (observed with the Ace Pro 2: zero frames delivered).
+        if let dev = device, let format = chosenFormat {
+            startRunning(dev, format: format)
+        } else {
+            outputQueue.sync { session.startRunning() }
         }
         setState(.streaming)
+        watchFirstFrames()
     }
 
+    /// 🐱 Observed with a real Ace Pro 2 (Webcam mode, macOS): the session runs and reports 1920×1080 at 30 fps but no
+    /// 🐱 frame ever arrives, with any session setting, until the camera has once streamed another format; after that
+    /// 🐱 1080p works. So: if nothing arrives within `firstFrameTimeout`, start once at the smallest other format, wait
+    /// 🐱 for one frame (it is not passed on), and start again at the chosen format. A second silence is reported.
+    private func watchFirstFrames() {
+        watchdog?.cancel()
+        let timeout = firstFrameTimeout
+        watchdog = Task { [weak self] in
+            for attempt in 0..<2 {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1e9))
+                guard let self, !Task.isCancelled, self.getConnectionState() == .streaming else { return }
+                if self.statistics().framesDecoded > 0 { return }
+                let name = self.device?.localizedName ?? "the USB camera"
+                if attempt == 1 {
+                    self.emit(.warning, "\(name) still sends no frames. On the camera, leave Webcam mode and enter it again, or reconnect the cable.")
+                    return
+                }
+                self.emit(.warning, String(format: "No frames from %@ after %.0f s; restarting its stream through another format (a camera that stays silent until its format changes).", name, timeout))
+                await self.restartStream()
+            }
+        }
+    }
+
+    /// 🐱 Restart the stream through the smallest other format and back (what the start-up watchdog does); frames in
+    /// 🐱 the other format are not passed on.
+    public func restartStream() async {
+        guard let dev = device, let format = chosenFormat else { return }
+        func area(_ f: AVCaptureDevice.Format) -> Int {
+            let d = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
+            return Int(d.width) * Int(d.height)
+        }
+        guard let other = dev.formats.filter({ area($0) != area(format) }).min(by: { area($0) < area($1) }) else { return }
+        lock.withLock { _restarting = true; _restartFrames = 0 }
+        startRunning(dev, format: other)
+        let t0 = HostClock.now()
+        while HostClock.now() - t0 < 2, lock.withLock({ _restartFrames }) == 0, !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let got = lock.withLock { _restartFrames }
+        startRunning(dev, format: format)
+        lock.withLock { _restarting = false }
+        let d = CMVideoFormatDescriptionGetDimensions(other.formatDescription)
+        emit(.info, "Restarted the stream (\(got) frame(s) at \(d.width)x\(d.height) in between)")
+    }
+
+    /// 🐱 Stop, set the format with the device locked, start (macOS keeps a format only if the device stays locked while
+    /// 🐱 the session starts).
+    private func startRunning(_ dev: AVCaptureDevice, format: AVCaptureDevice.Format) {
+        outputQueue.sync {
+            if session.isRunning { session.stopRunning() }
+            guard (try? dev.lockForConfiguration()) != nil else { session.startRunning(); return }
+            dev.activeFormat = format
+            if let range = format.videoSupportedFrameRateRanges.max(by: { $0.maxFrameRate < $1.maxFrameRate }) {
+                dev.activeVideoMinFrameDuration = range.minFrameDuration
+            }
+            session.startRunning()
+            dev.unlockForConfiguration()
+        }
+    }
+
+    private func emit(_ level: LogLevel, _ message: String) { onEvent?(.log(level: level, message: message)) }
+
     public func stopPreview() async {
+        watchdog?.cancel()
+        watchdog = nil
         outputQueue.sync { if session.isRunning { session.stopRunning() } }
         mailbox.close()
         if getConnectionState() == .streaming { setState(.connected) }
@@ -162,6 +226,8 @@ public final class ExternalCameraSource: NSObject, CameraVideoSource, AVCaptureV
 
     public func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        // 🐱 frames of the start-up restart (another format) only prove the stream is alive
+        if lock.withLock({ () -> Bool in if _restarting { _restartFrames += 1 }; return _restarting }) { return }
         let now = HostClock.now()
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         let frame = VideoFrame(index: index, pixelBuffer: pixels, presentationTime: pts.seconds, timestampQuality: .source, segment: 0,
