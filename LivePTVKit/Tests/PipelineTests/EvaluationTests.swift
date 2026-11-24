@@ -208,6 +208,7 @@ import Testing
         var piv = try #require(dict["piv"] as? [String: Any])
         piv.removeValue(forKey: "ensemble")
         piv.removeValue(forKey: "windowInterpolation")
+        piv.removeValue(forKey: "useGPU")                    // 🐱 0.7 had no GPU setting
         dict["piv"] = piv
         // 🐱 v6 had no scene corrections
         dict.removeValue(forKey: "reflections")
@@ -221,6 +222,7 @@ import Testing
         #expect(merged.schema == AnalysisSettings.currentSchema)
         #expect(merged.reflections == ReflectionParameters() && merged.container == ContainerGeometry())
         #expect(merged.piv.windowInterpolation == .lanczos4)
+        #expect(merged.piv.useGPU)
         // 🐱 a current-schema choice is kept
         var now = AnalysisSettings()
         now.piv.intensityCapping = true

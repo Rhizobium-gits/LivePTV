@@ -32,6 +32,7 @@ includes `report.html` and `methods.txt`.
 | **Uncertainty** | Random uncertainty of every vector from correlation statistics (validated: predicted/actual 0.82–1.10); noise-corrected fluctuations; standard errors of the mean |
 | **Scene corrections** | Running-mean background removal (reflections, labels, scratches); static-glare and moving-glint masks; user exclusions; camera-shake compensation measured on the raw frames |
 | **Containers** | Round bottles and flat tanks: 3-D ray tracing through wall and fluid (Snell's law), length scale from the bottle silhouette, wall band masked, displacements mapped end to end, results resampled on a regular grid in true coordinates |
+| **Speed** | The 32-px correlation passes run on the GPU (Metal, shader compiled at run time, so it also works in Swift Playgrounds) with the same vectors as the CPU path (tested to 1e-6 px); Apple M4, 1920×1080: 42 ms per frame vs 56 ms on the CPU only (1280×720: 17 vs 23 ms). Falls back to the CPU (Accelerate) on GPUs older than Apple7 |
 | **Also** | Ensemble correlation (µPIV), PTV with Brownian diffusion and Stokes–Einstein size, particle-image diameter and peak-locking diagnostics |
 | **Outputs** | Self-contained `report.html`, `methods.txt`, publication figures (PNG + vector PDF), CSV, VTK (ParaView), raw per-frame records, bit-exact preview stream |
 
@@ -48,6 +49,7 @@ How every number is computed, why, and how it was validated: **[docs/METHODS.md]
 | Ray tracer vs closed-form optics | ≤ 1.2·10⁻⁴ mm; centre magnification 0.7502 = 1/n |
 | Single-vector uncertainty vs actual error | ratio 0.82–1.10 over noise, size and out-of-plane loss |
 | Sub-pixel bias of aligned windows | bilinear 0.053 px → Lanczos-4 0.002 px |
+| GPU (Metal) vs CPU correlation, same frames | statuses identical; vectors within 6·10⁻⁷ px; uncertainty within 0.01 % |
 | Ensemble correlation, faint sparse vortex | 8.5 % vs 11.8 % (vector average); 99 % valid |
 | Brownian diffusion coefficient | within 4 % |
 
@@ -108,9 +110,9 @@ if var field = engine.compute(a: engine.prepare(pa.image, mask: pa.mask),
 **Tests and tools on a Mac** (Command Line Tools are enough):
 
 ```sh
-./scripts/test.sh                                     # 98 tests: algorithms, optics, end-to-end recordings, protocol
+./scripts/test.sh                                     # 101 tests: algorithms, optics, GPU vs CPU, end-to-end recordings, protocol
 cd LivePTVKit
-swift run -c release ace-probe benchmark --width 1280 --height 720
+swift run -c release ace-probe benchmark --width 1280 --height 720   # add --gpu 0 to time the CPU-only path
 swift run -c release ace-probe probe --seconds 20     # Mac joined to the camera Wi-Fi: hardware check
 ```
 
@@ -118,12 +120,12 @@ swift run -c release ace-probe probe --seconds 20     # Mac joined to the camera
 
 | Path | What |
 | --- | --- |
-| `LivePTVKit/Sources/PTVCore` | Algorithms: PIV engine, uncertainty, ensemble correlation, background and masks, refraction (ray tracing), shake compensation, PTV detector and tracker, statistics |
+| `LivePTVKit/Sources/PTVCore` | Algorithms: PIV engine (CPU and Metal GPU correlation), uncertainty, ensemble correlation, background and masks, refraction (ray tracing), shake compensation, PTV detector and tracker, statistics |
 | `LivePTVKit/Sources/Pipeline` | Frame pipeline, recording, end-of-measurement evaluation, figures, report, VTK |
 | `LivePTVKit/Sources/CameraKit` | Camera sources (Insta360 Wi-Fi client, USB, files, synthetic), H.264/H.265 decoding |
 | `LivePTVKit/Sources/LivePTVUI` | SwiftUI app (live view, settings, sessions) |
 | `LivePTVKit/Sources/ace-probe` | Mac command line: camera verification, benchmark, USB live analysis |
-| `LivePTVKit/Tests` | 98 tests, including the validation cases above |
+| `LivePTVKit/Tests` | 101 tests, including the validation cases above |
 | `App/`, `LivePTV.xcodeproj`, `project.yml` | iPad app shell (XcodeGen); the package lives in `LivePTVKit/` because Xcode cannot use the project's own folder as a local package |
 | `Package.swift` | Root manifest so the repository can be added by URL |
 | `docs/` | [METHODS](docs/METHODS.md), [Japanese methods](docs/METHODS_ja.md), [camera integration report](docs/TECHNICAL_REPORT.md), [Xcode guide (ja)](docs/INSTALL_XCODE_ja.md), example sessions |
@@ -160,7 +162,7 @@ LivePTV は、カメラ映像から流れ場を iPad 上でリアルタイムに
 - **丸い瓶のレンズ効果**: 水を入れた円筒は、中心付近で幅を約 1.33 倍に、壁際ではそれ以上に引き伸ばして見せます。カメラからの光線を壁と液体の中で屈折させて追跡し（スネルの法則）、測定面上の本当の位置と速度に直します。長さの尺度は瓶の外径とその見かけの幅から決まります。
 - **カメラの揺れ**: 静止部分から推定して差し引きます。
 
-すべてのベクトルに不確かさ（相関統計による推定）が付きます。記録を止めると、図（PNG とベクター PDF）、レポート、論文用の手法説明文、CSV、VTK が自動で保存されます。合成データによる検証では、反射と水面のきらめきがある 60 mm ガラス瓶の中の渦を誤差 2.4 % で再現しました。補正なしの解析では 33.8 % でした。
+すべてのベクトルに不確かさ（相関統計による推定）が付きます。32 px の相関は GPU（Metal）で計算し、CPU と同じベクトル（差 6·10⁻⁷ px 以内）を返します。Apple M4 の 1920×1080 で 1 フレーム 56 ms が 42 ms になりました。古い GPU では自動で CPU に切り替わります。記録を止めると、図（PNG とベクター PDF）、レポート、論文用の手法説明文、CSV、VTK が自動で保存されます。合成データによる検証では、反射と水面のきらめきがある 60 mm ガラス瓶の中の渦を誤差 2.4 % で再現しました。補正なしの解析では 33.8 % でした。
 
 - 演算の体系と検証の詳細: [docs/METHODS_ja.md](docs/METHODS_ja.md)
 - iPad へのインストール手順: [docs/INSTALL_XCODE_ja.md](docs/INSTALL_XCODE_ja.md)

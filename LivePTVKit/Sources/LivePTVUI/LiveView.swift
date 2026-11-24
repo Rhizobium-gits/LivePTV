@@ -277,7 +277,7 @@ struct MetricsBar: View {
                 item("Receive→result", fmt(m.receiveToResultMs, "%.0f ms") + (m.receiveToResultP95Ms.map { String(format: " (p95 %.0f)", $0) } ?? ""))
                 item("Assembly", fmt(m.assemblyWaitMs, "%.0f ms"))
                 item("Decode", fmt(m.decodeLatencyMs, "%.1f ms"))
-                item("Analyse", fmt(m.analysisDurationMs, "%.1f ms"))
+                item("Analyse", fmt(m.analysisDurationMs, "%.1f ms") + (m.pivDevice.map { " · \($0)" } ?? ""))
                 item("Glass→result", fmt(m.glassToResultMs, "%.0f ms"))
                 item("Missing frames", "\(m.streamGapFrames)", warn: m.streamGapFrames > 0)
                 item("Analysis drops", "\(m.analysisDrops)", warn: m.analysisDrops > 0)

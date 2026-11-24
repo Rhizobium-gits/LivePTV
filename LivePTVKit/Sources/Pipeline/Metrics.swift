@@ -178,6 +178,8 @@ public struct PipelineMetrics: Codable, Sendable, Equatable {
     public var pivUncertaintyPx: Double?
     /// 🐱 PIV: particle-image diameter from the correlation-peak width (px).
     public var particleImageDiameterPx: Double?
+    /// 🐱 PIV: where the correlation ran for the last pair, e.g. "GPU (Apple M4)", "GPU (Apple M4) + CPU", "CPU".
+    public var pivDevice: String?
     /// 🐱 Container correction in effect (short text), nil when none.
     public var containerStatus: String?
 

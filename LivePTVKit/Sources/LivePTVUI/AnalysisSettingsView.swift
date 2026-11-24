@@ -44,6 +44,9 @@ struct AnalysisSettingsView: View {
                         Text("Bilinear (fast, biased)").tag(PIVParameters.WindowInterpolation.bilinear)
                     }
                     Toggle("Per-vector uncertainty (correlation statistics)", isOn: $model.settings.piv.uncertainty)
+                    Toggle(PIVEngine.gpuName.map { "Correlate on the GPU (\($0))" } ?? "Correlate on the GPU (not available)",
+                           isOn: $model.settings.piv.useGPU)
+                        .disabled(PIVEngine.gpuName == nil)
                     numberD("Max masked share of a window", $model.settings.piv.maxMaskedFraction, 0.1...0.9, 0.05)
                     Toggle("Ensemble correlation (µPIV, steady flow)", isOn: $model.settings.piv.ensemble.enabled)
                     if model.settings.piv.ensemble.enabled {

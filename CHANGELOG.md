@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased: GPU correlation
+
+- **GPU (Metal).** The 32-px correlation passes (window fill, mean/σ, single-vector uncertainty, FFT cross-correlation,
+  peak search) run on the GPU; the sub-pixel fit stays on the CPU with the same code, so the vectors are the same as on
+  the CPU (statuses identical, ≤ 6·10⁻⁷ px, σ ≤ 0.01 %). Apple M4, 1920×1080: 42.0 ms per frame instead of 56.1 ms;
+  1280×720: 17.0 instead of 23.3 ms. The shader is compiled at run time (no Xcode step, works in Swift Playgrounds) and
+  checks itself at start-up; GPUs below Apple family 7, other window sizes and the new setting *Correlate on the GPU*
+  off use the CPU. The live panel shows where the correlation ran; `ace-probe benchmark --gpu 0` times the CPU path.
+- **Tests.** `GPUCorrelationTests` compare the two paths on a scene with every window status (101 tests in total).
+
 ## 0.7.0 (2026-11-24): research-grade corrections
 
 - **Scene corrections.** Running-mean temporal background removal (default); lower/upper envelopes as options. Static-glare
