@@ -58,11 +58,12 @@ struct FrameAggregate {
     var shakePairs = 0
     var shakeApplied = 0
     var shakeLearning = 0
+    var shakeInconsistent = 0
     var shakeMagnitudes = Reservoir(capacity: 20_000, seed: 0xF5)
     var shakeModels: [String: Int] = [:]
     var shakeRotationSq = 0.0
     /// 🐱 pivot sums as in ShakeCompensator: Σ(s² + θ²), ΣMᵀt, Σ|t|², pairs, and the grid centre the motions refer to
-    var shakePivot = (m: 0.0, mtx: 0.0, mty: 0.0, tt: 0.0, n: 0)
+    var shakePivot = (m: 0.0, mtx: 0.0, mty: 0.0, tt: 0.0, n: 0, noise: 0.0)
     var shakeCenter: (x: Double, y: Double)?
     /// 🐱 Camera-time series of the spatial mean speed (valid samples), one bin per second.
     var timeBins: [Int: (sum: Double, sumSq: Double, n: Int)] = [:]
@@ -99,10 +100,12 @@ struct FrameAggregate {
                     shakePivot.mty += th * sh.tx + sc * sh.ty
                     shakePivot.tt += sh.tx * sh.tx + sh.ty * sh.ty
                     shakePivot.n += 1
+                    shakePivot.noise += sh.rotationVariance ?? 0
                 }
                 if shakeCenter == nil, let c = r.shakeCenter { shakeCenter = c }
             }
             if sh.source == "learning background" { shakeLearning += 1 }
+            if sh.source == "static background inconsistent" { shakeInconsistent += 1 }
         }
         if r.excludeFromStatistics { shakeEnabled = true }
         if let sh = r.shake, sh.applied || sh.source != "none" { shakeEnabled = true }
@@ -338,7 +341,7 @@ enum SessionEvaluator {
         guard f.shakeEnabled else { return nil }
         var px: Double?, py: Double?, r2: Double?, inside: Bool?
         let s = f.shakePivot
-        if s.n >= 10, s.m > 0, s.tt > 0, let c = f.shakeCenter,
+        if s.n >= 10, s.m > 0, s.tt > 0, s.m >= 4 * s.noise, let c = f.shakeCenter,
            (s.m / Double(s.n)).squareRoot() * max(1, hypot(c.x, c.y)) >= 0.05 {
             let qx = c.x - s.mtx / s.m, qy = c.y - s.mty / s.m
             let dx = qx - c.x, dy = qy - c.y
@@ -458,6 +461,11 @@ enum SessionEvaluator {
             if frames.shakeEnabled, frames.shakePairs - frames.shakeLearning > 10,
                Double(frames.shakeApplied) / Double(frames.shakePairs - frames.shakeLearning) < 0.5 {
                 warnings.append("Camera-shake compensation was on but found too little static background in most frame pairs, so those vectors were not corrected. Draw a reference area on something that does not move (wall, ruler), or keep the camera steadier.")
+            }
+            if frames.shakeEnabled, frames.shakePairs - frames.shakeLearning > 10,
+               Double(frames.shakeInconsistent) / Double(frames.shakePairs - frames.shakeLearning) > 0.1 {
+                warnings.append(String(format: "In %.0f %% of the frame pairs the static windows disagreed with each other after the camera-motion fit (more than 1/16 window), so nothing was removed from those pairs. The \"static\" area moves on its own (flow, reflections) or has too little texture: draw a reference area on something rigid.",
+                                       100 * Double(frames.shakeInconsistent) / Double(frames.shakePairs - frames.shakeLearning)))
             }
             if frames.shakeLearning > 0 {
                 warnings.append("The first \(frames.shakeLearning) frame pairs were recorded while shake compensation was still learning the static background; they are excluded from the statistics. Start recording a few seconds after the preview to avoid this.")

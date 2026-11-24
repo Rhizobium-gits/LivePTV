@@ -1,0 +1,335 @@
+{
+ "stream": "stream.mov",
+ "size": [
+  1920,
+  1080
+ ],
+ "frames": 1334,
+ "device": "GPU (Apple M4) + CPU",
+ "settings": "PIV: 64 → 32 px, 50 % overlap, 3 final iterations (LivePTV; OpenPIV windef with its high-pass pre-filter σ = 7 px and normalised correlation); optical flow: OpenCV DIS (preset medium) and Farnebäck, averaged over the same 32 × 32 px windows",
+ "ms_per_pair": {
+  "LivePTV": 52.018917,
+  "OpenPIV": 2293.3192085001792,
+  "OpenCV DIS": 51.58885449873196,
+  "OpenCV Farnebäck": 141.53320799960056
+ },
+ "known_motion": {
+  "pairs": [
+   768,
+   841,
+   948,
+   1027
+  ],
+  "field": "1.3 px drift + Lamb–Oseen vortex, core 220 px, 4 px peak",
+  "error": {
+   "LivePTV": {
+    "textured": {
+     "n": 15131,
+     "median_px": 0.08933183284657031,
+     "rms_px": 0.4946000852943165,
+     "p95_px": 1.0319751038653309,
+     "share_over_0p5px": 0.09701936421915273,
+     "share_over_2px": 0.020686008855991013
+    },
+    "textureless": {
+     "n": 14092,
+     "median_px": 0.16076027732950532,
+     "rms_px": 0.3530844235645692,
+     "p95_px": 0.45175415986115647,
+     "share_over_0p5px": 0.03569401078626171,
+     "share_over_2px": 0.001419244961680386
+    }
+   },
+   "OpenPIV": {
+    "textured": {
+     "n": 15131,
+     "median_px": 0.1953336348788736,
+     "rms_px": 0.670089643877192,
+     "p95_px": 1.6090326018874608,
+     "share_over_0p5px": 0.2643579406516423,
+     "share_over_2px": 0.02742713634260789
+    },
+    "textureless": {
+     "n": 14101,
+     "median_px": 0.18384151030251858,
+     "rms_px": 0.4451289479540218,
+     "p95_px": 0.7497628059699477,
+     "share_over_0p5px": 0.10914119565988228,
+     "share_over_2px": 0.005035103893340898
+    }
+   },
+   "OpenCV DIS": {
+    "textured": {
+     "n": 15131,
+     "median_px": 0.2717152836294848,
+     "rms_px": 6.894748017748657,
+     "p95_px": 15.553193674696953,
+     "share_over_0p5px": 0.38364946137069594,
+     "share_over_2px": 0.2048113145198599
+    },
+    "textureless": {
+     "n": 14101,
+     "median_px": 0.3615795261816157,
+     "rms_px": 1.8486449278562833,
+     "p95_px": 2.2775035196728446,
+     "share_over_0p5px": 0.3701155946386781,
+     "share_over_2px": 0.059924828026381105
+    }
+   },
+   "OpenCV Farnebäck": {
+    "textured": {
+     "n": 15131,
+     "median_px": 0.4294189068101551,
+     "rms_px": 1.0301194378463145,
+     "p95_px": 2.0642620435821595,
+     "share_over_0p5px": 0.45614962659440883,
+     "share_over_2px": 0.05544907805168198
+    },
+    "textureless": {
+     "n": 14101,
+     "median_px": 2.6438510180414423,
+     "rms_px": 2.875425170672524,
+     "p95_px": 4.440459028164819,
+     "share_over_0p5px": 0.9866676122260832,
+     "share_over_2px": 0.775335082618254
+    }
+   },
+   "OpenPIV defaults": {
+    "textured": {
+     "n": 15131,
+     "median_px": 0.7276153528159118,
+     "rms_px": 1.3982545219511084,
+     "p95_px": 2.9675038984812385,
+     "share_over_0p5px": 0.6394818584363228,
+     "share_over_2px": 0.1423567510409094
+    },
+    "textureless": {
+     "n": 14101,
+     "median_px": 0.7157024190766968,
+     "rms_px": 1.5096913251208544,
+     "p95_px": 2.985946632365146,
+     "share_over_0p5px": 0.6215162045245018,
+     "share_over_2px": 0.1940997092404794
+    }
+   }
+  }
+ },
+ "false_motion": {
+  "pairs": [
+   215,
+   301,
+   501,
+   541,
+   608,
+   1067,
+   1134,
+   1161,
+   1186,
+   1210,
+   1247,
+   1295
+  ],
+  "magnitude": {
+   "LivePTV": {
+    "textured": {
+     "n": 28984,
+     "median_px": 0.03648734522551313,
+     "rms_px": 0.08897372662827788,
+     "p95_px": 0.17829726812458646,
+     "share_over_0p5px": 0.0023461219983439137,
+     "share_over_2px": 3.450179409329285e-05
+    },
+    "textureless": {
+     "n": 32032,
+     "median_px": 0.08123196124980456,
+     "rms_px": 0.24442573385554248,
+     "p95_px": 0.24863929325032197,
+     "share_over_0p5px": 0.006274975024975025,
+     "share_over_2px": 0.001123876123876124
+    }
+   },
+   "OpenPIV": {
+    "textured": {
+     "n": 28984,
+     "median_px": 0.027891616412005653,
+     "rms_px": 0.059530989620051704,
+     "p95_px": 0.11339407038947538,
+     "share_over_0p5px": 0.0005175269113993927,
+     "share_over_2px": 0.0
+    },
+    "textureless": {
+     "n": 32043,
+     "median_px": 0.0806169191622832,
+     "rms_px": 0.24251952235167193,
+     "p95_px": 0.3239675408343382,
+     "share_over_0p5px": 0.012514433729675749,
+     "share_over_2px": 0.0010298661174047373
+    }
+   },
+   "OpenCV DIS": {
+    "textured": {
+     "n": 28984,
+     "median_px": 0.07791941240429878,
+     "rms_px": 0.18474891900375026,
+     "p95_px": 0.3433381006121635,
+     "share_over_0p5px": 0.016733370135247033,
+     "share_over_2px": 0.0007245376759591499
+    },
+    "textureless": {
+     "n": 32043,
+     "median_px": 0.2490214705467224,
+     "rms_px": 0.5402746672415849,
+     "p95_px": 1.0117839932441703,
+     "share_over_0p5px": 0.19389570264956466,
+     "share_over_2px": 0.01189027244640015
+    }
+   },
+   "OpenCV Farnebäck": {
+    "textured": {
+     "n": 28984,
+     "median_px": 0.04821821115911007,
+     "rms_px": 0.14171651113327616,
+     "p95_px": 0.27179610133171045,
+     "share_over_0p5px": 0.009349986199282363,
+     "share_over_2px": 0.00017250897046646425
+    },
+    "textureless": {
+     "n": 32043,
+     "median_px": 0.0013956238981336355,
+     "rms_px": 0.025903409546825216,
+     "p95_px": 0.051143734157085396,
+     "share_over_0p5px": 0.0,
+     "share_over_2px": 0.0
+    }
+   }
+  }
+ },
+ "agreement_moving": {
+  "pairs": [
+   215,
+   301,
+   501,
+   541,
+   608,
+   1067,
+   1134,
+   1161,
+   1186,
+   1210,
+   1247,
+   1295
+  ],
+  "difference": {
+   "LivePTV vs OpenPIV": {
+    "n": 2089,
+    "median_px": 0.5140880204407275,
+    "rms_px": 1.3369423559621014,
+    "p95_px": 2.8498553728767635,
+    "share_over_0p5px": 0.5093346098611776,
+    "share_over_2px": 0.1235040689325036
+   },
+   "LivePTV vs OpenCV DIS": {
+    "n": 2089,
+    "median_px": 0.626110638963824,
+    "rms_px": 2.3286715073230657,
+    "p95_px": 5.031899984193444,
+    "share_over_0p5px": 0.5701292484442317,
+    "share_over_2px": 0.20248922929631402
+   },
+   "LivePTV vs OpenCV Farnebäck": {
+    "n": 2089,
+    "median_px": 0.7442861543790024,
+    "rms_px": 2.1771801444939936,
+    "p95_px": 4.591229497967453,
+    "share_over_0p5px": 0.6122546673049306,
+    "share_over_2px": 0.23934897079942558
+   },
+   "OpenPIV vs OpenCV DIS": {
+    "n": 2089,
+    "median_px": 0.6659704124234528,
+    "rms_px": 2.4210993320831533,
+    "p95_px": 5.300621149226924,
+    "share_over_0p5px": 0.5773097175682145,
+    "share_over_2px": 0.23551938726663477
+   },
+   "OpenPIV vs OpenCV Farnebäck": {
+    "n": 2089,
+    "median_px": 0.6880099524958216,
+    "rms_px": 2.0705069341513282,
+    "p95_px": 4.297602570092115,
+    "share_over_0p5px": 0.601244614648157,
+    "share_over_2px": 0.22403063666826234
+   },
+   "OpenCV DIS vs OpenCV Farnebäck": {
+    "n": 2089,
+    "median_px": 0.5488336682319641,
+    "rms_px": 2.065667437729547,
+    "p95_px": 4.830285835266113,
+    "share_over_0p5px": 0.5275251316419339,
+    "share_over_2px": 0.19961704164672092
+   }
+  }
+ },
+ "per_pair": [
+  {
+   "frame": 215,
+   "still_windows": 4332,
+   "moving_textured_windows": 173
+  },
+  {
+   "frame": 301,
+   "still_windows": 4841,
+   "moving_textured_windows": 260
+  },
+  {
+   "frame": 501,
+   "still_windows": 5828,
+   "moving_textured_windows": 129
+  },
+  {
+   "frame": 541,
+   "still_windows": 4039,
+   "moving_textured_windows": 109
+  },
+  {
+   "frame": 608,
+   "still_windows": 2186,
+   "moving_textured_windows": 176
+  },
+  {
+   "frame": 1067,
+   "still_windows": 5839,
+   "moving_textured_windows": 146
+  },
+  {
+   "frame": 1134,
+   "still_windows": 5067,
+   "moving_textured_windows": 159
+  },
+  {
+   "frame": 1161,
+   "still_windows": 5837,
+   "moving_textured_windows": 155
+  },
+  {
+   "frame": 1186,
+   "still_windows": 5492,
+   "moving_textured_windows": 103
+  },
+  {
+   "frame": 1210,
+   "still_windows": 5399,
+   "moving_textured_windows": 214
+  },
+  {
+   "frame": 1247,
+   "still_windows": 6112,
+   "moving_textured_windows": 194
+  },
+  {
+   "frame": 1295,
+   "still_windows": 6055,
+   "moving_textured_windows": 271
+  }
+ ]
+}

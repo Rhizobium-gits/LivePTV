@@ -5,3 +5,4 @@ results/figs/
 harness/.build/
 __pycache__/
 *.log
+tools/faceboxes

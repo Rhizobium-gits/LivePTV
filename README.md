@@ -29,6 +29,16 @@ includes `report.html` and `methods.txt`.
 
 ## What you can see
 
+**Live, from a real camera.** An Insta360 Ace Pro 2 in USB webcam mode on an Apple M4 Mac, analysed as it streams
+by the app's pipeline (`ace-probe usb`): 1920 × 1080 at 30.1 fps by the camera's timestamps, PIV at ½ resolution with
+camera-motion correction, 29.3 fps analysed (19 ms per frame, 2 of 1,334 frames skipped in 45 s). The animation is
+the overlay the analysis drew during the run, with the metrics recorded at that moment; faces and a phone are blurred
+in the picture only (the analysis used the raw frames). There is no fluid in this scene: a person moving at a desk
+shows the camera link, the real-time path and the field display. The [comparison with other tools](#live-with-a-real-camera)
+uses the same recording. Demo settings: pairs of consecutive frames, no background removal, 0.25-s display average.
+
+<p align="center"><img src="docs/images/live_camera.gif" width="80%" alt="Live PIV from an Insta360 Ace Pro 2 over USB: vectors follow a person turning their head and moving their hands, with camera and analysis frame rates"></p>
+
 Every recording ends with an evaluation folder: publication figures (PNG + vector PDF), a self-contained
 `report.html`, a `methods.txt` paragraph, CSV and VTK. The figures below were written by the app's own pipeline and
 recorder ([`ShowcaseTests`](LivePTVKit/Tests/PipelineTests/ShowcaseTests.swift)); the synthetic scenes have an exact
@@ -57,10 +67,11 @@ With the same estimator, LivePTV and trackpy agree within 1 % (lag 1–2: 1,252 
 <img src="docs/images/real_brownian.png" alt="LivePTV tracks of Brownian spheres, ensemble mean squared displacement, and particle sizes from LivePTV and trackpy">
 
 **Camera motion.** A camera on a stand that sways about its foot, 900 px below the picture, through the full
-pipeline: the apparent velocity fluctuation of the static border falls from 13.96 to 1.20 px/s, the turning point is
-located within 25 px and reported as outside the frame, and PTV particle velocities improve from 10.52 to 3.55 px/s
-RMS error. Rolling-shutter shear with keystone: 1.46 px/s with the automatic model, 4.87 px/s with shift + rotation +
-zoom only. The mean field is not the issue (zero-mean shake averages out); fluctuation and turbulence statistics,
+pipeline: the apparent velocity fluctuation of the static border falls from 13.96 to 1.17 px/s, the turning point is
+located within 15 px and reported as outside the frame, and PTV particle velocities improve from 10.54 to 2.54 px/s
+RMS error. Rolling-shutter shear with keystone: 1.45 px/s with the automatic model, 4.82 px/s with shift + rotation +
+zoom only. With a real camera standing still, the correction stays below 0.2 px at full resolution (it reached 516 px
+at ½ resolution before the fixes the real camera prompted; [details](#experiments), C). The mean field is not the issue (zero-mean shake averages out); fluctuation and turbulence statistics,
 and every single PTV step, are. Synthetic Brownian PTV through the pipeline: D within 3 % of the true value,
 Stokes–Einstein 557 nm for true 572 nm.
 
@@ -128,6 +139,52 @@ error). In uniform flow there is nothing to resolve and the predictor adds a lit
 Both tools produce scattered vectors in regions without particles (behind the plate in test2); LivePTV's are somewhat
 wilder there.
 
+### Live, with a real camera
+
+The recording behind the [live animation](#what-you-can-see): an Insta360 Ace Pro 2 in USB webcam mode, 1920 × 1080 at
+30 fps, every frame saved as ProRes during the live run (`ace-probe usb --save-video`) and then given to all tools.
+Three questions, each answerable on real images:
+
+- **Known motion on real frames.** Two consecutive frames from a still moment keep the camera's real texture, sensor
+  noise and compression; the second is warped by a known field (1.3 px drift + a 4 px vortex), so every window has an
+  exact answer.
+- **False motion.** The camera stood on a desk (LivePTV measured its motion at 0.01 px per pair), so on the parts of
+  the picture that did not change, any displacement is an error.
+- **Real motion.** A person moving at the desk has no ground truth; there the tools are compared with each other.
+
+| Recorded Ace Pro 2 stream, 1920 × 1080 | LivePTV | OpenPIV 0.26 | OpenCV DIS | OpenCV Farnebäck |
+| --- | --- | --- | --- | --- |
+| Time per frame pair (Apple M4) | **52 ms** | 2.3 s | **52 ms** | 142 ms |
+| Known motion: median error, textured / textureless windows | **0.089 / 0.161 px** | 0.195 / 0.184 px | 0.272 / 0.362 px | 0.429 / 2.64 px |
+| Known motion: windows off by more than 0.5 px (textured) | **9.7 %** | 26.4 % | 38.4 % | 45.6 % |
+| False motion on the still background, median / p95: textured | 0.036 / 0.18 px | **0.028 / 0.11 px** | 0.078 / 0.34 px | 0.048 / 0.27 px |
+| False motion: textureless (bare ceiling, walls) | 0.081 / 0.25 px | 0.081 / 0.32 px | 0.25 / 1.0 px | 0.001 / 0.05 px ¹ |
+| Real motion: median difference from LivePTV | | 0.51 px | 0.63 px | 0.74 px |
+| Live on the camera | 29 fps at ½ resolution, ≈ 10 fps at full | offline | flow only (library) | flow only (library) |
+
+¹ Farnebäck returns zero where the picture has no gradient: right on a still background, wrong when such a region
+moves (2.64 px median error in the known-motion test).
+
+Both PIV tools used 64 → 32 px windows, 50 % overlap and three final iterations. OpenPIV ran with its high-pass
+pre-filter (σ = 7 px) and normalised correlation, the counterpart of LivePTV's own pre-processing; with its defaults
+the known-motion error is 0.728 px (biased towards zero on natural images). OpenCV's dense flow was averaged over the
+same 32-px windows. On the still background OpenPIV is slightly quieter than LivePTV in textured windows (p95 0.11 vs
+0.18 px). On real motion of a person (non-rigid, occluding, blurred) no tool is right by construction, and all of
+them differ from each other by 0.5–0.7 px median.
+
+<p align="center"><img src="docs/images/real_camera_known.png" width="92%" alt="Error maps of the four tools on real camera frames with a known displacement"></p>
+<p align="center"><img src="docs/images/real_camera_tools.png" width="92%" alt="The same real frame pair (a person moving at a desk) in LivePTV, OpenPIV, OpenCV DIS and OpenCV Farnebäck"></p>
+
+Not shown here: a flow with tracers filmed with this camera. The scripts are
+[`benchmarks/python/real_camera_compare.py`](benchmarks/python/real_camera_compare.py) and
+[`make_live_gif.py`](benchmarks/python/make_live_gif.py); the commands are in [benchmarks/](benchmarks/).
+
+The real camera also exposed four faults that synthetic tests had missed, all fixed and covered by tests now: a
+camera that stays silent at 1080p until it has streamed another format once (a watchdog restarts the stream), the
+camera-motion correction on real images (up to 516 px at the frame edge at ½ resolution for a still camera; now
+below 1.2 px), a "pivot" fitted to noise, and an empty live field when long automatic pairs met a short display
+average ([CHANGELOG](CHANGELOG.md)).
+
 ### Particle tracking
 
 Detection on single frames (particle images 1.5–4 px, noise σ 2–8 grey levels, 0.002–0.01 particles/px), tracking
@@ -167,6 +224,7 @@ corrected. With the same estimator the two agree: lag 1–2 (LivePTV's estimator
 | PIV, 1920 × 1080 pair | 39 ms on the GPU, 67 ms CPU only | OpenPIV 0.26: 2.1 s |
 | PTV, 1920 × 1080 frame with ~20,000 particles (detect + track) | 52 ms (17,500 found) | trackpy 0.7: 0.49 s (10,700 found) |
 | PIV on OpenPIV's real samples (511 × 369 … 1720 × 2304) | 6–94 ms | OpenPIV 0.26: 0.19–4.1 s |
+| PIV live from a USB camera (Ace Pro 2, 1920 × 1080 at 30 fps), whole pipeline | ½ resolution: 19 ms per frame, 29 fps analysed; full: 85–98 ms, ≈ 10 fps | |
 
 OpenPIV and trackpy ran in one Python process, as they do by default; both can be parallelised over image pairs.
 LivePTV's numbers are per pair inside one process, so they set the live frame rate. iPad timings are not measured yet.
@@ -423,21 +481,29 @@ The recording spreads slightly faster than diffusive (MSD exponent 1.07), so the
 </details>
 
 <details>
-<summary><b>C · Camera motion</b> — fluctuation 13.96 → 1.20 px/s for a stand swaying about its foot; pivot within 25 px</summary>
+<summary><b>C · Camera motion</b> — fluctuation 13.96 → 1.17 px/s for a stand swaying about its foot; pivot within 15 px; a still real camera: edge correction max 516 → 1.2 px</summary>
 
 The synthetic camera moves the whole picture each frame (rotation about a chosen point, shift, zoom, shear, keystone) over a steady vortex with a static textured border; the full pipeline runs with compensation off or automatic. A steady flow has no real fluctuation, so what remains is camera motion left over.
 
 | case | without / before | with |
 | --- | --- | --- |
-| stand sways about its foot, 900 px below the picture: static border fluctuation | 13.96 px/s | 1.20 px/s |
+| stand sways about its foot, 900 px below the picture: static border fluctuation | 13.96 px/s | 1.17 px/s |
 | same: flow fluctuation | 5.32 px/s | 1.13 px/s |
-| same, PTV: velocity RMS error | 10.52 px/s | 3.55 px/s |
-| rolling-shutter shear + keystone: static border (similarity model vs automatic) | 4.87 px/s | 1.46 px/s |
-| same: flow | 3.56 px/s | 0.88 px/s |
+| same, PTV: velocity RMS error | 10.54 px/s | 2.54 px/s |
+| rolling-shutter shear + keystone: static border (similarity model vs automatic) | 4.82 px/s | 1.45 px/s |
+| same: flow | 3.57 px/s | 0.88 px/s |
 
-The pivot was found at (311, 1357) px for the true (320, 1380) px (R² 1.00) and reported as outside the frame. Unit tests: a pivot 1500 px below the picture is learned within 25 px; with static background on one side only, shear and keystone are never fitted; a pure shift with noise is fitted as a shift in all 65 pairs. The compensation is for fluctuations and single PTV steps: zero-mean shake averages out of the mean field, and there compensation costs a little (mean-field error 0.94 % without, 1.24 % with), because the long-term mean motion is kept as possible flow and its estimate is uncertain.
+The pivot was found at (315, 1367) px for the true (320, 1380) px (R² 1.00) and reported as outside the frame. Unit tests: a pivot 1500 px below the picture is learned within 25 px; with static background on one side only, shear and keystone are never fitted; a pure shift with noise is fitted as a shift in all 65 pairs. The compensation is for fluctuations and single PTV steps: zero-mean shake averages out of the mean field, and there compensation costs a little (mean-field error 0.94 % without, 1.24 % with), because the long-term mean motion is kept as possible flow and its estimate is uncertain.
 
 <img src="docs/images/bench_camera_motion.png" alt="Fluctuation maps without and with compensation, and the learned pivot">
+
+**Real camera, still scene.** 15 s of a still room from an Insta360 Ace Pro 2 standing on a desk (truth: nothing moves), replayed through the pipeline. Before the fixes described in [METHODS §10](docs/METHODS.md#10-camera-shake-compensation), half resolution left only a few dozen static windows, whose clustered noise was fitted as rotation and keystone and extrapolated across the frame.
+
+|  | ½ resolution, before | ½ resolution, now | full resolution, before | full resolution, now |
+| --- | --- | --- | --- | --- |
+| correction applied at the frame edge: median / p95 / max | 0.937 / 18.6 / 516 px | 0.041 / 0.271 / 1.2 px | 0.01 / 0.045 / 1.38 px | 0.007 / 0.033 / 0.18 px |
+| temporal scatter of the mean field (median over cells) | 11.83 px/s | 0.81 px/s | 30.79 px/s | 1.28 px/s |
+| pairs corrected with a "pivot" (there is none) | 0 of 416 | 0 of 416 | 221 of 416 | 0 of 416 |
 
 </details>
 
@@ -489,8 +555,8 @@ How every number is computed, why, and how it was validated: **[docs/METHODS.md]
 | Vector positions; edge rows in a shear flow | offset 0.5 → < 0.1 px; edge vectors replaced 58–71 % → 0 % |
 | GPU (Metal) vs CPU correlation, same frames | statuses identical; vectors within 7·10⁻⁵ px (deformed frames bit-identical); uncertainty within 0.1 % |
 | Ensemble correlation, faint sparse vortex | 8.5 % vs 11.8 % (vector average); 99 % valid |
-| Camera on a stand swaying about a point 900 px below the picture | static-border fluctuation 13.96 → 1.20 px/s; pivot located within 25 px; PTV velocity error 10.52 → 3.55 px/s |
-| Rolling-shutter shear + keystone | 1.46 px/s (automatic model) vs 4.87 px/s (shift + rotation + zoom only) |
+| Camera on a stand swaying about a point 900 px below the picture | static-border fluctuation 13.96 → 1.17 px/s; pivot located within 15 px; PTV velocity error 10.54 → 2.54 px/s |
+| Rolling-shutter shear + keystone | 1.45 px/s (automatic model) vs 4.82 px/s (shift + rotation + zoom only) |
 | Brownian diffusion coefficient | within 4 %; with background removal on, +3 % (was +37 %: slow particles leaked into the background) |
 | PTV linking, 5000 particles at 1.4 spacings per frame | precision / recall 0.98 / 0.97 (was 0.32 / 0.21) |
 
@@ -589,7 +655,9 @@ The details are in [docs/METHODS.md §16](docs/METHODS.md#16-outputs).
 ## Status and limitations
 
 - The Insta360 Ace Pro 2 Wi-Fi protocol is community-documented and tested only against a protocol-accurate mock
-  camera. Verify it with `ace-probe` before relying on it ([camera report](docs/TECHNICAL_REPORT.md), §9). USB cameras work.
+  camera. Verify it with `ace-probe` before relying on it ([camera report](docs/TECHNICAL_REPORT.md), §9). USB cameras work:
+  tested live with an Ace Pro 2 in webcam mode on a Mac (1080p30, [above](#live-with-a-real-camera)). A flow with
+  tracers has not been filmed with it yet.
 - Refraction is corrected for one measurement plane. With volume illumination of turbid fluid, the image is
   depth-averaged. See [METHODS §18](docs/METHODS.md#18-limitations-and-recommendations) for this and the other
   assumptions: optical axis, lens distortion, temperature-dependent refractive indices.
@@ -626,7 +694,9 @@ LivePTV は、カメラ映像から流れ場を iPad 上でリアルタイムに
 
 OpenPIV に同梱の実験画像（正解なし）では、2 つのツールの差は中央値 0.02–0.07 px でした。trackpy の実際の顕微鏡動画（1 µm の粒子のブラウン運動）では、同じ推定式で拡散係数が 1 % 以内で一致しました。分解能（細かい構造の再現）は OpenPIV の既定がわずかに上です。LivePTV は予測場を平滑化してノイズを抑えているためで、平滑化を切ると 65 px になります。
 
-カメラを載せた台の揺れも補正します。平行移動だけでなく、画面の外の点（台の根元など）を中心とする回転、ローリングシャッターのせん断、カメラの傾きによる台形のゆがみを、静止した背景から自動で見分けて差し引きます。回転の中心も推定して表示します。PIV だけでなく PTV の速度にも効きます。画面の 900 px 下を中心に揺れる台の合成映像では、静止した縁の見かけの速度変動が 13.96 から 1.20 px/s に下がり、PTV の速度誤差は 10.52 から 3.55 px/s になりました。
+**実際のカメラでの動作**（Insta360 Ace Pro 2 を USB のウェブカメラモードで Mac に接続）: 1920×1080・30 fps の映像を、解像度 1/2 の PIV で毎秒 29 フレーム（1 フレーム 19 ms）その場で解析できました（全解像度では毎秒約 10 フレーム）。上の動画は、そのとき解析が描いた画面そのものです（顔とスマートフォンは画像だけぼかしています）。同じ録画で既存ツールと比べました。2 枚の実フレームの片方に既知の動き（1.3 px の平行移動 + 4 px の渦）を与えた試験では、誤差の中央値は LivePTV 0.089 px、OpenPIV 0.195 px（高域フィルタ・正規化相関あり。既定のままでは 0.728 px）、OpenCV DIS 0.272 px、Farnebäck 0.429 px でした。1 ペアの処理時間は LivePTV 52 ms、OpenCV DIS 52 ms、Farnebäck 142 ms、OpenPIV 2.3 s です。静止した背景に出る見かけの動き（真値 0）は、模様のある部分で LivePTV 0.036 px・OpenPIV 0.028 px（中央値）と同程度でした。実カメラで試したことで、合成データでは出なかった不具合が 4 つ見つかり、直しました（起動直後にカメラがフレームを送らない、静止したカメラに解像度 1/2 で最大 516 px の誤った揺れ補正、雑音から「回転の中心」を推定、長いペア間隔で表示の場が空になる）。トレーサー入りの流れはまだこのカメラで撮影していません。
+
+カメラを載せた台の揺れも補正します。平行移動だけでなく、画面の外の点（台の根元など）を中心とする回転、ローリングシャッターのせん断、カメラの傾きによる台形のゆがみを、静止した背景から自動で見分けて差し引きます。回転の中心も推定して表示します。PIV だけでなく PTV の速度にも効きます。画面の 900 px 下を中心に揺れる台の合成映像では、静止した縁の見かけの速度変動が 13.96 から 1.17 px/s に下がり、PTV の速度誤差は 10.54 から 2.54 px/s になりました。
 
 - 各実験の条件と全条件の結果（表と図）: 上の [Experiments](#experiments) の節（英語、項目をクリックで開く）
 - 演算の体系と検証の詳細: [docs/METHODS_ja.md](docs/METHODS_ja.md)

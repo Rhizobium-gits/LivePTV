@@ -1,5 +1,5 @@
 {
- "source": "printed by LivePTVKit/Tests/PipelineTests/CameraMotionPipelineTests.swift and Tests/PTVCoreTests/CameraMotionTests.swift (2026-11-25); stand_sway_* from ShowcaseTests.standSway",
+ "source": "printed by LivePTVKit/Tests/PipelineTests/CameraMotionPipelineTests.swift and Tests/PTVCoreTests/CameraMotionTests.swift (2026-11-25, after the real-camera fixes); stand_sway_* from ShowcaseTests.standSway",
  "pipeline": {
   "stand_sway_piv": {
    "pivot_truth_px": [
@@ -9,28 +9,28 @@
    "rotation_rms_rad": 0.0003,
    "border_std_px_s": {
     "uncompensated": 13.96,
-    "automatic": 1.2
+    "automatic": 1.17
    },
    "flow_std_px_s": {
     "uncompensated": 5.32,
     "automatic": 1.13
    },
    "pivot_found_px": [
-    311,
-    1357
+    315,
+    1367
    ],
    "pivot_r2": 1.0,
    "models": {
-    "pivot": 74,
-    "similarity": 20
+    "pivot": 81,
+    "similarity": 13
    }
   },
   "stand_sway_ptv": {
    "velocity_rms_error_px_s": {
-    "uncompensated": 10.52,
-    "automatic": 3.55
+    "uncompensated": 10.54,
+    "automatic": 2.54
    },
-   "samples": 19751,
+   "samples": 44562,
    "pivot_found_px": [
     310,
     1362
@@ -38,11 +38,11 @@
   },
   "shear_keystone_piv": {
    "border_std_px_s": {
-    "similarity": 4.87,
-    "automatic": 1.46
+    "similarity": 4.82,
+    "automatic": 1.45
    },
    "flow_std_px_s": {
-    "similarity": 3.56,
+    "similarity": 3.57,
     "automatic": 0.88
    },
    "models": {
@@ -73,9 +73,9 @@
   },
   "shear_keystone": {
    "worst_flow_error_px": {
-    "automatic": 0.193,
-    "perspective": 0.193,
-    "similarity": 0.643
+    "automatic": 0.204,
+    "perspective": 0.204,
+    "similarity": 0.661
    }
   },
   "pure_shift_noise_0p05px": {

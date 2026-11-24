@@ -261,7 +261,25 @@ def camera():
               f"{100 * c['showcase_stand_sway']['mean_field_rel_rms']['automatic']:.2f} % with), because the long-term mean "
               "motion is kept as possible flow and its estimate is uncertain."
             + '\n\n<img src="docs/images/bench_camera_motion.png" alt="Fluctuation maps without and with compensation, and the learned pivot">')
-    return details("C · Camera motion", "fluctuation 13.96 → 1.20 px/s for a stand swaying about its foot; pivot within 25 px", body)
+    rc = load("real_camera_still.json")
+    hr, fr = rc["half_resolution"], rc["full_resolution"]
+    def edge(e):
+        return f"{e['median']:.3g} / {e['p95']:.3g} / {e['max']:.3g} px"
+    rows2 = [["correction applied at the frame edge: median / p95 / max", edge(hr['edge_correction_px']['before']), edge(hr['edge_correction_px']['now']),
+              edge(fr['edge_correction_px']['before']), edge(fr['edge_correction_px']['now'])],
+             ["temporal scatter of the mean field (median over cells)", f"{hr['mean_field_temporal_std_px_s']['before']:.2f} px/s", f"{hr['mean_field_temporal_std_px_s']['now']:.2f} px/s",
+              f"{fr['mean_field_temporal_std_px_s']['before']:.2f} px/s", f"{fr['mean_field_temporal_std_px_s']['now']:.2f} px/s"],
+             ["pairs corrected with a \"pivot\" (there is none)", f"{hr['pivot_pairs']['before']} of {rc['pairs']}", f"{hr['pivot_pairs']['now']} of {rc['pairs']}",
+              f"{fr['pivot_pairs']['before']} of {rc['pairs']}", f"{fr['pivot_pairs']['now']} of {rc['pairs']}"]]
+    body += ("\n\n**Real camera, still scene.** 15 s of a still room from an Insta360 Ace Pro 2 standing on a desk "
+             "(truth: nothing moves), replayed through the pipeline. Before the fixes described in "
+             "[METHODS §10](docs/METHODS.md#10-camera-shake-compensation), half resolution left only a few dozen static "
+             "windows, whose clustered noise was fitted as rotation and keystone and extrapolated across the frame.\n\n"
+             + table(["", "½ resolution, before", "½ resolution, now", "full resolution, before", "full resolution, now"], rows2))
+    dist = ((sw['pivot_found_px'][0] - sw['pivot_truth_px'][0]) ** 2 + (sw['pivot_found_px'][1] - sw['pivot_truth_px'][1]) ** 2) ** 0.5
+    return details("C · Camera motion", f"fluctuation {sw['border_std_px_s']['uncompensated']:.2f} → {sw['border_std_px_s']['automatic']:.2f} px/s "
+                   f"for a stand swaying about its foot; pivot within {5 * int(dist // 5 + 1)} px; a still real camera: "
+                   f"edge correction max {hr['edge_correction_px']['before']['max']:.0f} → {hr['edge_correction_px']['now']['max']:.1f} px", body)
 
 
 def showcase():

@@ -195,10 +195,12 @@ public final class PIVFieldAverager {
         if entries.count > 600 { entries.removeFirst(entries.count - 600) }
     }
 
-    /// 🐱 Mean, standard deviation and count of the fields within `window` seconds before `time`, then the
-    /// 🐱 normalised median test on the means.
+    /// 🐱 Mean, standard deviation and count of the fields within `window` seconds before `time` (and always the newest
+    /// 🐱 field), then the normalised median test on the means. A field is dated at its pair's mid time, half a pair
+    /// 🐱 spacing back: with 1-s pairs (automatic spacing in a still scene) and a 0.25-s window, a live run showed an
+    /// 🐱 empty field for seconds while every pair was measured.
     public func snapshot(at time: Double) -> FieldSnapshot {
-        let cutoff = time - parameters.window
+        let cutoff = Swift.min(time - parameters.window, entries.last?.time ?? .infinity)
         if let firstKept = entries.firstIndex(where: { $0.time >= cutoff }) {
             if firstKept > 0 { entries.removeFirst(firstKept) }
         } else {

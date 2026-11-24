@@ -30,8 +30,8 @@ comparison and its scripts are outside this repository.
   in `evaluation.json` (`cameraMotion`), the report and the methods paragraph; `frames.csv` records the model, all
   parameters and each pair's turning point. **PTV is corrected too**: consecutive frames are cross-correlated for the
   static windows and every particle step has the camera motion between its frames subtracted. Measured: a stand
-  swaying about a point 900 px below the picture, static-border fluctuation 13.96 → 1.20 px/s and the pivot found within
-  25 px; PTV velocity error 10.52 → 3.55 px/s; shear + keystone 4.87 (similarity) → 1.46 px/s.
+  swaying about a point 900 px below the picture, static-border fluctuation 13.96 → 1.17 px/s and the pivot found within
+  15 px; PTV velocity error 10.54 → 2.54 px/s; shear + keystone 4.82 (similarity) → 1.45 px/s.
 - **PTV detection.** Threshold = background level + k·σ from the median and MAD of the smoothed foreground (k = 5;
   particles no longer raise it): recall at 0.01 particles/px 0.45–0.53 → 0.76–0.89, worst precision 0.997, pure noise
   gives no detections. The running background is not updated under this frame's detections (slow particles used to
@@ -43,6 +43,32 @@ comparison and its scripts are outside this repository.
 - **Fix: static background slowly lost.** The static test learned from fields that keep the long-term mean motion, so
   static windows showed it as a steady offset and dropped out one by one (compensation could stop after ~60 pairs on
   clean images). It now learns from fields with the whole motion removed.
+- **Tested with a real camera.** An Insta360 Ace Pro 2 in USB webcam mode on an M4 Mac (`ace-probe usb`): 1920 × 1080
+  at 30.1 fps by the camera's timestamps, PIV at ½ resolution analysed live at 29 fps (19 ms per frame, 2 of 1,334
+  frames skipped), full resolution ≈ 10 fps (85–98 ms per frame live). Four faults showed up that synthetic tests had not:
+  - *Camera that stays silent.* The Ace Pro 2 sometimes reports 1080p30 but sends no frame until it has streamed
+    another format once. A watchdog restarts the stream through the smallest other format when no frame arrives within
+    3 s, and reports a second silence (`ExternalCameraSource.restartStream()`).
+  - *Camera-motion correction on real images.* A still camera at ½ resolution received corrections of up to 516 px at
+    the frame edge (median 0.94 px). Causes and fixes: static windows were re-measured on the raw frames with their own
+    vectors as offsets, which after background removal are noise (now one robust offset, the median of the static
+    windows); a model was used when a few clustered windows determined it locally (now also the correction's precision
+    at the field's corners: leverage ≤ 0.25, or absolute noise ≤ 0.05 px); fits whose static windows disagree by more
+    than 1/16 window are not applied (reported, with a warning); a session pivot also needs rotations at least twice
+    their noise (noise fitted from a cluster of windows looks like rotation about that cluster). Afterwards: median
+    0.04 px, maximum 1.2 px; temporal scatter of the still scene's mean field 11.8 → 0.8 px/s (full resolution 30.8 →
+    1.3 px/s, maximum correction 1.38 → 0.18 px). The re-measurement runs in parallel (full-resolution frame 93 → 77 ms).
+  - *Empty live field with long pairs.* A PIV field is dated at its pair's mid time; with automatic 1-s pairs (a still
+    scene) and a 0.25-s averaging window, the displayed field was empty while every pair was measured. The newest field
+    is now always part of the average.
+  - `ace-probe`: `file` mode (a recorded video through the same pipeline), analysis switches for `usb`/`file`
+    (`--method --shake --shake-model --deform --gpu --background --resolution --spacing`), `--save-video` (every camera
+    frame as ProRes with its timestamp, for re-analysis by any tool), `--gif-every` (the live overlay as frames, with
+    `hud.csv`), `--blur-faces` / `--blur-rect` (privacy in published pictures only; the analysis uses the raw frames).
+- **Real-camera comparison** (`benchmarks/python/real_camera_compare.py`): LivePTV, OpenPIV, OpenCV DIS and Farnebäck on
+  the same recorded stream; known motion applied to real frames (median error 0.089 px vs 0.195, 0.272, 0.429 px), false
+  motion on the still background, agreement on real motion, time per pair (52 ms vs 2.3 s, 52 ms, 142 ms). The README
+  opens with an animation of the live analysis (faces blurred).
 - **Synthetic camera.** Rotation about any point (`shakePivot`), zoom, shear and keystone.
 - **Synthetic flows.** A counter-rotating vortex pair and a Taylor–Green vortex array, also in the app's demo source.
 - **Example sessions and benchmarks.** `ShowcaseTests` (run only with `LIVEPTV_SHOWCASE_DIR`) records synthetic scenes

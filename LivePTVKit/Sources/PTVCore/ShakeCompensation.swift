@@ -81,6 +81,9 @@ public struct ShakeEstimate: Codable, Equatable, Sendable {
     /// 🐱 the rotation was too small to locate it.
     public var pivotX: Double? = nil
     public var pivotY: Double? = nil
+    /// 🐱 Variance of the fitted rotation plus that of the zoom caused by measurement noise alone (rad²; nil for
+    /// 🐱 translation). A session pivot needs rotations well above it.
+    public var rotationVariance: Double? = nil
 
     public static let none = ShakeEstimate(tx: 0, ty: 0, rotation: 0, scale: 0, backgroundWindows: 0, residualRMSPx: 0, applied: false, source: "none")
 
@@ -148,7 +151,7 @@ public final class ShakeCompensator {
     public private(set) var center = (x: 0.0, y: 0.0)
     /// 🐱 Sums for the session pivot q: Σ(s² + θ²), Σ Mᵀt and Σ|t|² over pairs, with M = [[s, θ], [−θ, s]]; the
     /// 🐱 shift a rotation + zoom about q causes at the centre is t = −M(q − c), so q = c − ΣMᵀt / Σ(s² + θ²).
-    private var pivotSums = (m: 0.0, mtx: 0.0, mty: 0.0, tt: 0.0, n: 0)
+    private var pivotSums = (m: 0.0, mtx: 0.0, mty: 0.0, tt: 0.0, n: 0, noise: 0.0)
     /// 🐱 Models used so far (counts), for the evaluation.
     public private(set) var modelCounts: [String: Int] = [:]
 
@@ -164,15 +167,18 @@ public final class ShakeCompensator {
         motionCount = 0
         gridKey = nil
         pairs = 0
-        pivotSums = (0, 0, 0, 0, 0)
+        pivotSums = (0, 0, 0, 0, 0, 0)
         modelCounts = [:]
     }
 
     /// 🐱 The session's pivot, once rotation has been seen often and strongly enough and rotation + zoom about one
-    /// 🐱 point explain at least 80 % of the fitted shifts (else nil: the camera also shifts on its own).
+    /// 🐱 point explain at least 80 % of the fitted shifts (else nil: the camera also shifts on its own). "Strongly
+    /// 🐱 enough" includes: the fitted rotations are at least twice their noise (Σ(s² + θ²) ≥ 4 Σ noise variance). Rotations
+    /// 🐱 fitted to noise from a cluster of static windows are rotations about that cluster, which would otherwise pass the
+    /// 🐱 80 % test and put a "pivot" on it (seen with a still real camera).
     public var pivot: ShakePivot? {
         let s = pivotSums
-        guard s.n >= 10, s.m > 0, s.tt > 0 else { return nil }
+        guard s.n >= 10, s.m > 0, s.tt > 0, s.m >= 4 * s.noise else { return nil }
         let half = max(1, hypot(center.x, center.y))
         // 🐱 the rotation must move the frame's corners by ≥ 0.05 px RMS, or the point cannot be located
         guard (s.m / Double(s.n)).squareRoot() * half >= 0.05 else { return nil }
@@ -231,20 +237,30 @@ public final class ShakeCompensator {
         var g = f
         var remeasured: [Int: (dx: Double, dy: Double)] = [:]
         if let remeasure {
+            // 🐱 the background-subtracted vectors of static windows are noise: without enough raw-frame measurements
+            // 🐱 there is nothing reliable to fit (fail safe, reported)
             let m = remeasure(background)
-            if m.count >= max(3, p.minBackgroundWindows) {
-                for (k, d) in m { g.dx[k] = d.dx; g.dy[k] = d.dy }
-                background = background.filter { m[$0] != nil }
-                remeasured = m
+            guard m.count >= max(3, p.minBackgroundWindows) else {
+                updateHistory(f, perFrame: perFrame, parameters: p)
+                var e = ShakeEstimate.none
+                e.backgroundWindows = m.count
+                e.source = "too little static background"
+                return e
             }
+            for (k, d) in m { g.dx[k] = d.dx; g.dy[k] = d.dy }
+            background = background.filter { m[$0] != nil }
+            remeasured = m
         }
         let learnedPivot = pivot
         // 🐱 1. a first robust pass with a simple model removes gross outliers (windows that were not really static)
         var est = fit(g, background, model: Self.determinable(.similarity, g, background) ? .similarity : .translation, pivot: nil)
         background = keepInliers(g, background, est)
+        // 🐱 per-component measurement noise from that first fit (an upper bound: it also holds what the simple model misses)
+        let firstResiduals = background.map { residual(g, $0, est) }
+        let noise = (firstResiduals.map { $0 * $0 }.reduce(0, +) / Double(max(1, 2 * firstResiduals.count))).squareRoot()
         // 🐱 2. the model: the requested one if the background determines it (else the richest simpler one that it
         // 🐱 does), or in automatic mode the one with the lowest BIC
-        est = choose(g, background, requested: p.model, pivot: learnedPivot)
+        est = choose(g, background, requested: p.model, pivot: learnedPivot, noise: noise)
         // 🐱 3. reject again with the chosen model and refit
         let kept = keepInliers(g, background, est)
         if kept.count >= max(3, p.minBackgroundWindows), kept.count < background.count {
@@ -254,8 +270,20 @@ public final class ShakeCompensator {
         let residuals = background.map { residual(g, $0, est) }
         est.backgroundWindows = background.count
         est.residualRMSPx = sqrt(residuals.map { $0 * $0 }.reduce(0, +) / Double(max(1, residuals.count)))
+        // 🐱 Fail safe: static windows that disagree by more than 1/16 window after the fit (2 px for 32-px windows; a
+        // 🐱 good real background leaves ~0.2 px) are not one camera motion. Nothing is corrected, and it is reported.
+        guard est.residualRMSPx <= Self.maxResidual(f) else {
+            updateHistory(f, perFrame: perFrame, parameters: p)
+            var e = ShakeEstimate.none
+            e.backgroundWindows = background.count
+            e.residualRMSPx = est.residualRMSPx
+            e.source = "static background inconsistent"
+            return e
+        }
         est.applied = true
         est.source = source
+        est.rotationVariance = Self.rotationVariance(ShakeParameters.Model(rawValue: est.model) ?? .translation, g, background,
+                                                     center: center, residualRMS: est.residualRMSPx)
         modelCounts[est.model, default: 0] += 1
         learnPivot(est)
         est.pivotX = nil; est.pivotY = nil
@@ -305,6 +333,9 @@ public final class ShakeCompensator {
         return est
     }
 
+    /// 🐱 Largest background RMS residual (full-frame px) for which a fit is still treated as camera motion.
+    static func maxResidual(_ f: PIVField) -> Double { max(1, Double(f.windowSize) / 16) }
+
     private func residual(_ f: PIVField, _ k: Int, _ e: ShakeEstimate) -> Double {
         let d = e.displacement(x: f.x(k), y: f.y(k), cx: center.x, cy: center.y)
         return hypot(f.dx[k] - d.0, f.dy[k] - d.1)
@@ -327,6 +358,7 @@ public final class ShakeCompensator {
         pivotSums.mty += th * e.tx + s * e.ty
         pivotSums.tt += e.tx * e.tx + e.ty * e.ty
         pivotSums.n += 1
+        pivotSums.noise += e.rotationVariance ?? 0
     }
 
     // 🐱 MARK: fitting
@@ -365,13 +397,28 @@ public final class ShakeCompensator {
         }
     }
 
+    /// 🐱 Largest leverage the fitted correction may have anywhere in the field: its variance there in units of one
+    /// 🐱 window's measurement variance. 0.25 = the correction adds at most a quarter of one vector's noise variance.
+    static let maxLeverage = 0.25
+    /// 🐱 …unless its absolute noise there is negligible anyway (px, 1 σ): with clean images a band of static windows on
+    /// 🐱 one side still locates a rotation well enough to remove it across the frame.
+    static let negligibleCorrectionNoisePx = 0.05
+
     /// 🐱 Whether the windows determine the model: the smallest eigenvalue of the column-normalised normal matrix
-    /// 🐱 (1 = orthogonal columns, 0 = degenerate) is at least 0.02, and there are ≥ 2 observations per parameter.
+    /// 🐱 (1 = orthogonal columns, 0 = degenerate) is at least 0.02, there are ≥ 2 observations per parameter, and the
+    /// 🐱 fit stays precise out to the field's corners: leverage h ≤ `maxLeverage`, or σ·√h ≤ `negligibleCorrectionNoisePx`
+    /// 🐱 with σ the per-component measurement noise (`noise`, px) when it is known. The last condition is what a handful
+    /// 🐱 of clustered noisy windows fails: their rotation, zoom or keystone is well conditioned locally but extrapolated
+    /// 🐱 across the frame with a long lever arm (a real camera at 1/2 resolution: ~40 static windows with ~1 px scatter,
+    /// 🐱 corrections of 10–500 px at the frame edge).
     static func determinable(_ m: ShakeParameters.Model, _ f: PIVField, _ idx: [Int], center: (x: Double, y: Double)? = nil,
-                             pivot: (dx: Double, dy: Double)? = nil) -> Bool {
+                             pivot: (dx: Double, dy: Double)? = nil, noise: Double? = nil) -> Bool {
         let k = parameterCount(m)
         guard k > 0, 2 * idx.count >= 2 * k + 2 else { return false }
-        if m == .translation { return true }
+        func precise(_ h: Double) -> Bool {
+            h <= maxLeverage || (noise.map { $0 * h.squareRoot() <= negligibleCorrectionNoisePx } ?? false)
+        }
+        if m == .translation { return precise(1 / Double(idx.count)) }
         let c = center ?? centroid(f, idx)
         let l = scaleLength(f)
         var n = [Double](repeating: 0, count: k * k)
@@ -379,9 +426,54 @@ public final class ShakeCompensator {
             let b = basis(m, px: f.x(i) - c.x, py: f.y(i) - c.y, l: l, pivot: pivot)
             for r in 0..<k { for s in 0..<k { n[r * k + s] += b[r].0 * b[s].0 + b[r].1 * b[s].1 } }
         }
+        guard precise(cornerLeverage(m, f, n, k, center: c, l: l, pivot: pivot)) else { return false }
         let d = (0..<k).map { max(1e-300, n[$0 * k + $0]).squareRoot() }
         for r in 0..<k { for s in 0..<k { n[r * k + s] /= d[r] * d[s] } }
         return smallestEigenvalue(n, k) >= 0.02
+    }
+
+    /// 🐱 Noise variance of the fitted rotation plus that of the zoom (rad²): σ² gᵀN⁻¹g for both, with σ² the per-component
+    /// 🐱 residual variance and g picking rotation or zoom out of the model's parameters.
+    static func rotationVariance(_ m: ShakeParameters.Model, _ f: PIVField, _ idx: [Int], center c: (x: Double, y: Double),
+                                 residualRMS: Double) -> Double? {
+        guard m == .similarity || m == .affine || m == .perspective else { return nil }
+        let k = parameterCount(m), l = scaleLength(f)
+        var n = [Double](repeating: 0, count: k * k)
+        for i in idx {
+            let b = basis(m, px: f.x(i) - c.x, py: f.y(i) - c.y, l: l, pivot: nil)
+            for r in 0..<k { for s in 0..<k { n[r * k + s] += b[r].0 * b[s].0 + b[r].1 * b[s].1 } }
+        }
+        var gs = [Double](repeating: 0, count: k), gt = gs
+        if m == .similarity {
+            gs[2] = 1 / l; gt[3] = 1 / l
+        } else {
+            gs[2] = 0.5 / l; gs[5] = 0.5 / l      // 🐱 scale = (a11 + a22) / 2
+            gt[3] = 0.5 / l; gt[4] = -0.5 / l     // 🐱 rotation = (a12 − a21) / 2
+        }
+        guard let zs = solve(n, gs, k), let zt = solve(n, gt, k) else { return nil }
+        var v = 0.0
+        for j in 0..<k { v += gs[j] * zs[j] + gt[j] * zt[j] }
+        return residualRMS * residualRMS / 2 * v
+    }
+
+    /// 🐱 max over the field's four corners and both components of bᵀN⁻¹b (N = the fit's normal matrix, b = the model's
+    /// 🐱 basis at the corner): the variance of the fitted correction there per unit measurement variance. It does not
+    /// 🐱 depend on where the expansion centre is.
+    static func cornerLeverage(_ m: ShakeParameters.Model, _ f: PIVField, _ n: [Double], _ k: Int, center c: (x: Double, y: Double),
+                               l: Double, pivot: (dx: Double, dy: Double)?) -> Double {
+        guard f.columns > 0, f.rows > 0 else { return .infinity }
+        var worst = 0.0
+        for corner in [0, f.columns - 1, (f.rows - 1) * f.columns, f.rows * f.columns - 1] {
+            let b = basis(m, px: f.x(corner) - c.x, py: f.y(corner) - c.y, l: l, pivot: pivot)
+            for component in 0..<2 {
+                let v = (0..<k).map { component == 0 ? b[$0].0 : b[$0].1 }
+                guard let z = solve(n, v, k) else { return .infinity }
+                var h = 0.0
+                for j in 0..<k { h += v[j] * z[j] }
+                worst = max(worst, h)
+            }
+        }
+        return worst
     }
 
     private static func centroid(_ f: PIVField, _ idx: [Int]) -> (x: Double, y: Double) {
@@ -399,11 +491,12 @@ public final class ShakeCompensator {
 
     /// 🐱 The requested model, or (automatic) the determinable model with the lowest BIC; a requested model the
     /// 🐱 background cannot determine falls back to the richest simpler one it can.
-    private func choose(_ f: PIVField, _ idx: [Int], requested: ShakeParameters.Model, pivot pv: ShakePivot?) -> ShakeEstimate {
+    private func choose(_ f: PIVField, _ idx: [Int], requested: ShakeParameters.Model, pivot pv: ShakePivot?, noise: Double?) -> ShakeEstimate {
         let q = pv.map { (dx: $0.x - center.x, dy: $0.y - center.y) }
         let ladder: [ShakeParameters.Model] = [.translation, .similarity, .affine, .perspective]
         func ok(_ m: ShakeParameters.Model) -> Bool {
-            m == .pivot ? (q != nil && Self.determinable(.pivot, f, idx, center: center, pivot: q)) : Self.determinable(m, f, idx, center: center, pivot: nil)
+            m == .pivot ? (q != nil && Self.determinable(.pivot, f, idx, center: center, pivot: q, noise: noise))
+                : Self.determinable(m, f, idx, center: center, pivot: nil, noise: noise)
         }
         if requested != .auto {
             if ok(requested) { return fit(f, idx, model: requested, pivot: pv) }

@@ -7,6 +7,10 @@
 // 🐱                                            [--gpu 0]   (0 = correlate on the CPU even when a GPU is available)
 // 🐱   swift run -c release ace-probe usb [--seconds 30] [--width 1920 --height 1080] [--out DIR] [--cell 48]
 // 🐱       live analysis from a USB (UVC) camera, e.g. the Ace Pro 2 in Webcam mode
+// 🐱   swift run -c release ace-probe file --path clip.mov [--out DIR]
+// 🐱       a recorded video through the same pipeline, every frame analysed
+// 🐱   usb and file also take: --method piv|ptv  --shake 0  --shake-model auto|translation|similarity|affine|perspective|pivot
+// 🐱                           --deform 0  --gpu 0  --background off|mean|…  --resolution auto|full|half|quarter  --spacing K
 import AVFoundation
 import CameraKit
 import CoreImage
@@ -14,6 +18,7 @@ import Foundation
 import ImageIO
 import Pipeline
 import PTVCore
+import Vision
 
 struct Args {
     var command = "probe"
@@ -321,11 +326,66 @@ final class LatestResult: @unchecked Sendable {
 
 /// 🐱 Frame + particles + tails + velocity field, drawn in image pixel coordinates, saved as PNG.
 func saveOverlay(_ r: FrameResult, to url: URL, vectorSeconds: Double) {
-    let ci = CIImage(cvPixelBuffer: r.frame.pixelBuffer)
-    guard let frame = CIContext().createCGImage(ci, from: ci.extent) else { return }
+    guard let img = renderOverlay(r, vectorSeconds: vectorSeconds),
+          let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else { return }
+    CGImageDestinationAddImage(dest, img, nil)
+    CGImageDestinationFinalize(dest)
+}
+
+private let overlayContext = CIContext()
+
+/// 🐱 Privacy for published overlays: faces (Vision) and fixed rectangles (image px, origin top-left) are blurred in
+/// 🐱 the picture only; the analysis always runs on the unblurred frames. A face keeps its last box for up to 1 s when
+/// 🐱 detection misses it for a moment.
+final class PrivacyBlur: @unchecked Sendable {
+    let faces: Bool
+    let rects: [CGRect]
+    private var lastFaces: [CGRect] = []
+    private var lastFaceTime = -Double.infinity
+    init(faces: Bool, rects: [CGRect]) { self.faces = faces; self.rects = rects }
+
+    func apply(_ image: CIImage, pixelBuffer: CVPixelBuffer, time: Double) -> CIImage {
+        let w = image.extent.width, h = image.extent.height
+        var boxes: [CGRect] = rects.map { CGRect(x: $0.minX, y: h - $0.maxY, width: $0.width, height: $0.height) }   // 🐱 → CI (origin bottom-left)
+        if faces {
+            let request = VNDetectFaceRectanglesRequest()
+            try? VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:]).perform([request])
+            let found = (request.results ?? []).map { o -> CGRect in
+                let b = o.boundingBox
+                let r = CGRect(x: b.minX * w, y: b.minY * h, width: b.width * w, height: b.height * h)
+                return r.insetBy(dx: -0.45 * r.width, dy: -0.55 * r.height)   // 🐱 hair, ears, chin
+            }
+            if !found.isEmpty { lastFaces = found; lastFaceTime = time } else if time - lastFaceTime > 1 { lastFaces = [] }
+            boxes += lastFaces
+        }
+        guard !boxes.isEmpty else { return image }
+        let blurred = image.clampedToExtent().applyingGaussianBlur(sigma: max(12, Double(w) / 60)).cropped(to: image.extent)
+        var out = image
+        for b in boxes { out = blurred.cropped(to: b.intersection(image.extent)).composited(over: out) }
+        return out
+    }
+}
+
+/// 🐱 The same drawing, scaled to `width` px and saved as JPEG (frames of an animation).
+func saveOverlayJPEG(_ r: FrameResult, to url: URL, vectorSeconds: Double, width: Int, privacy: PrivacyBlur? = nil, lineScale: Double = 1) {
+    guard let img = renderOverlay(r, vectorSeconds: vectorSeconds, privacy: privacy, lineScale: lineScale) else { return }
+    let w = min(width, img.width), h = Int((Double(img.height) * Double(w) / Double(img.width)).rounded())
+    guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return }
+    ctx.interpolationQuality = .high
+    ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+    guard let small = ctx.makeImage(), let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.jpeg" as CFString, 1, nil) else { return }
+    CGImageDestinationAddImage(dest, small, [kCGImageDestinationLossyCompressionQuality: 0.92] as CFDictionary)
+    CGImageDestinationFinalize(dest)
+}
+
+func renderOverlay(_ r: FrameResult, vectorSeconds: Double, privacy: PrivacyBlur? = nil, lineScale: Double = 1) -> CGImage? {
+    var ci = CIImage(cvPixelBuffer: r.frame.pixelBuffer)
+    if let privacy { ci = privacy.apply(ci, pixelBuffer: r.frame.pixelBuffer, time: r.frame.presentationTime) }
+    guard let frame = overlayContext.createCGImage(ci, from: ci.extent) else { return nil }
     let w = frame.width, h = frame.height
     guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
-                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
     ctx.draw(frame, in: CGRect(x: 0, y: 0, width: w, height: h))
     ctx.translateBy(x: 0, y: CGFloat(h))
     ctx.scaleBy(x: 1, y: -1)   // 🐱 from here on y points down, like image coordinates
@@ -344,7 +404,7 @@ func saveOverlay(_ r: FrameResult, to url: URL, vectorSeconds: Double) {
     if let f = r.field {
         let speeds = f.cells.filter(\.valid).map { hypot($0.u, $0.v) }.sorted()
         let ref = speeds.isEmpty ? 1 : max(1e-9, speeds[min(speeds.count - 1, Int(Double(speeds.count) * 0.95))])
-        ctx.setLineWidth(2.5)
+        ctx.setLineWidth(2.5 * lineScale)
         for c in f.cells where c.valid {
             let t = min(1, hypot(c.u, c.v) / ref)
             ctx.setStrokeColor(CGColor(red: t, green: 1 - abs(t - 0.5) * 2 * 0.6, blue: 1 - t, alpha: 1))
@@ -353,16 +413,106 @@ func saveOverlay(_ r: FrameResult, to url: URL, vectorSeconds: Double) {
             ctx.addLine(to: CGPoint(x: ex, y: ey))
             let len = hypot(ex - c.x, ey - c.y)
             if len > 4 {
-                let ux = (ex - c.x) / len, uy = (ey - c.y) / len, hd = min(8, len * 0.35)
+                let ux = (ex - c.x) / len, uy = (ey - c.y) / len, hd = min(8 * lineScale, len * 0.35)
                 ctx.move(to: CGPoint(x: ex, y: ey)); ctx.addLine(to: CGPoint(x: ex - hd * (ux - 0.5 * uy), y: ey - hd * (uy + 0.5 * ux)))
                 ctx.move(to: CGPoint(x: ex, y: ey)); ctx.addLine(to: CGPoint(x: ex - hd * (ux + 0.5 * uy), y: ey - hd * (uy - 0.5 * ux)))
             }
             ctx.strokePath()
         }
     }
-    guard let img = ctx.makeImage(), let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else { return }
-    CGImageDestinationAddImage(dest, img, nil)
-    CGImageDestinationFinalize(dest)
+    return ctx.makeImage()
+}
+
+/// 🐱 Every frame the camera delivered, as ProRes 422 with the camera's timestamps (re-analysis of exactly what was
+/// 🐱 analysed live, by LivePTV or other tools).
+final class StreamWriter: @unchecked Sendable {
+    private let lock = NSLock()
+    private let url: URL
+    private var writer: AVAssetWriter?
+    private var input: AVAssetWriterInput?
+    private var adaptor: AVAssetWriterInputPixelBufferAdaptor?
+    private(set) var written = 0
+    private(set) var dropped = 0
+    private var closed = false
+
+    init(url: URL) { self.url = url; try? FileManager.default.removeItem(at: url) }
+
+    func append(_ f: VideoFrame) {
+        lock.withLock {
+            guard !closed else { return }
+            let t = CMTime(seconds: f.presentationTime, preferredTimescale: 90_000)
+            if writer == nil {
+                guard let w = try? AVAssetWriter(outputURL: url, fileType: .mov) else { closed = true; return }
+                let i = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.proRes422,
+                                                                                 AVVideoWidthKey: f.width, AVVideoHeightKey: f.height])
+                i.expectsMediaDataInRealTime = true
+                let a = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: i, sourcePixelBufferAttributes: nil)
+                guard w.canAdd(i) else { closed = true; return }
+                w.add(i)
+                guard w.startWriting() else { closed = true; return }
+                w.startSession(atSourceTime: t)
+                writer = w; input = i; adaptor = a
+            }
+            guard let i = input, let a = adaptor, i.isReadyForMoreMediaData else { dropped += 1; return }
+            if a.append(f.pixelBuffer, withPresentationTime: t) { written += 1 } else { dropped += 1 }
+        }
+    }
+
+    func finish() async {
+        let w: AVAssetWriter? = lock.withLock {
+            closed = true
+            input?.markAsFinished()
+            return writer
+        }
+        if let w { await w.finishWriting() }
+    }
+}
+
+/// 🐱 Analysis settings shared by `usb` and `file`: the app's defaults plus the switches below.
+func analysisSettings(_ args: Args) -> AnalysisSettings {
+    var settings = AnalysisSettings()
+    settings.field.cellSize = args.double("cell", 48)
+    settings.field.window = args.double("window", 1.0)
+    settings.method = AnalysisMethod(rawValue: args.string("method", "piv")) ?? .piv
+    if args.options["shake"] == "0" { settings.shake.enabled = false }
+    if let m = args.options["shake-model"], let v = ShakeParameters.Model(rawValue: m) { settings.shake.model = v }
+    if args.options["deform"] == "0" { settings.piv.deformation = false }
+    if args.options["gpu"] == "0" { settings.piv.useGPU = false }
+    if let b = args.options["background"], let v = ReflectionParameters.Background(rawValue: b) { settings.reflections.background = v }
+    if let r = args.options["resolution"], let v = PIVResolution(rawValue: r) { settings.pivResolution = v }
+    if let k = args.options["spacing"].flatMap(Int.init) { settings.piv.pairSpacing = k; settings.piv.autoPairSpacing = false }
+    say("method \(settings.method.title), shake \(settings.shake.enabled ? settings.shake.model.rawValue : "off"), deformation \(settings.piv.deformation), GPU \(settings.piv.useGPU), background \(settings.reflections.background.rawValue), resolution \(settings.pivResolution.rawValue)")
+    return settings
+}
+
+/// 🐱 A recorded video through the same pipeline and recorder, every frame analysed (offline).
+/// 🐱   swift run -c release ace-probe file --path clip.mov [--out DIR] [the usb analysis switches]
+func fileRun(_ args: Args) async -> Int32 {
+    guard let path = args.options["path"] else { say("--path is required"); return 2 }
+    let url = URL(fileURLWithPath: path)
+    let out = URL(fileURLWithPath: args.string("out", "file-run"))
+    try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+    let settings = analysisSettings(args)
+    let source = VideoFileSource(url: url, pacing: .asFastAsPossible)
+    let pipeline = AnalysisPipeline(source: source, settings: settings)
+    source.onEvent = { pipeline.handleSourceEvent($0) }
+    do {
+        pipeline.attach(recorder: try ExperimentRecorder(parent: out, label: url.deletingPathExtension().lastPathComponent, source: source.info,
+                                                         settings: settings, streamParameters: nil, cameraInfo: [:], archivePreviewStream: false))
+        try await source.startPreview()
+    } catch { say("FAILED: \(error)"); return 3 }
+    pipeline.start()
+    while pipeline.isRunning { try? await Task.sleep(nanoseconds: 20_000_000) }
+    let m = pipeline.metrics
+    let result = await pipeline.finishRecording()
+    say("frames analysed \(m.framesAnalyzed), analysis time/frame \(String(format: "%.1f", m.analysisDurationMs ?? .nan)) ms median")
+    say("session: \(result?.folder.path ?? "-")")
+    if let e = result?.evaluation {
+        say(String(format: "field: %d/%d valid cells (%.0f %%), mean speed %@ %@", e.field.validCells, e.field.columns * e.field.rows, e.field.coveragePercent,
+                   e.field.meanSpeedOfMeanField.map { String(format: "%.3g", $0) } ?? "-", e.field.speedUnit))
+        if let cm = e.cameraMotion { say("camera motion: \(cm.text)") }
+    }
+    return 0
 }
 
 func usbLive(_ args: Args) async -> Int32 {
@@ -378,13 +528,31 @@ func usbLive(_ args: Args) async -> Int32 {
     }
     let source = ExternalCameraSource(deviceUniqueID: dev.uniqueID,
                                       preferredWidth: args.options["width"].flatMap(Int.init), preferredHeight: args.options["height"].flatMap(Int.init))
-    var settings = AnalysisSettings()
-    settings.field.cellSize = args.double("cell", 48)
-    settings.field.window = args.double("window", 1.0)
+    let settings = analysisSettings(args)
     let pipeline = AnalysisPipeline(source: source, settings: settings)
     let latest = LatestResult()
     pipeline.onResult = { latest.set($0) }
-    source.onEvent = { pipeline.handleSourceEvent($0) }   // 🐱 stream parameters + log lines into the session
+    // 🐱 --save-video FILE.mov: every delivered camera frame, ProRes 422 with camera timestamps
+    let streamWriter = args.options["save-video"].map { StreamWriter(url: URL(fileURLWithPath: $0)) }
+    if let streamWriter { pipeline.onPreviewFrame = { streamWriter.append($0) } }
+    // 🐱 --gif-every S [--gif-width W]: the live overlay every S seconds as JPEG (+ the metrics shown, hud.csv)
+    let gifEvery = args.options["gif-every"].flatMap(Double.init)
+    let gifWidth = Int(args.double("gif-width", 960))
+    let gifDir = out.appendingPathComponent("gif")
+    var hud = "file,t_s,frame_index,pts_s,camera_fps,analysed_fps,analyse_ms,receive_to_result_ms,vectors,valid_cells,particles\n"
+    if gifEvery != nil { try? FileManager.default.createDirectory(at: gifDir, withIntermediateDirectories: true) }
+    var gifCount = 0, lastGifIndex = -1
+    // 🐱 --blur-faces 1 and/or --blur-rect x,y,w[,h];x,y,w,h (image px): privacy for overlays that will be published
+    let blurRects: [CGRect] = (args.options["blur-rect"] ?? "").split(separator: ";").compactMap { part in
+        let v = part.split(separator: ",").compactMap { Double($0) }
+        return v.count == 4 ? CGRect(x: v[0], y: v[1], width: v[2], height: v[3]) : nil
+    }
+    let privacy: PrivacyBlur? = args.options["blur-faces"] == "1" || !blurRects.isEmpty
+        ? PrivacyBlur(faces: args.options["blur-faces"] == "1", rects: blurRects) : nil
+    source.onEvent = { e in                               // 🐱 stream parameters + log lines into the session
+        if case let .log(level, message) = e { say("[\(level.rawValue)] \(message)") }
+        pipeline.handleSourceEvent(e)
+    }
     do {
         let rec = try ExperimentRecorder(parent: out, label: "usb-live", source: source.info, settings: settings,
                                          streamParameters: nil, cameraInfo: ["device": dev.localizedName, "model": dev.modelID],
@@ -401,10 +569,31 @@ func usbLive(_ args: Args) async -> Int32 {
     pipeline.start()
     let t0 = HostClock.now()
     var nextReport = t0 + 2
+    // 🐱 --restart-at S: exercise the start-up watchdog's stream restart on a running camera
+    var restartAt = args.options["restart-at"].flatMap(Double.init)
     var snaps: [Double] = [seconds / 3, 2 * seconds / 3]
+    var nextGif = t0
     while HostClock.now() - t0 < seconds {
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        try? await Task.sleep(nanoseconds: gifEvery == nil ? 100_000_000 : 10_000_000)
         let now = HostClock.now()
+        if let every = gifEvery, now >= nextGif, let r = latest.value, r.frame.index != lastGifIndex {
+            nextGif += every
+            if nextGif < now { nextGif = now + every }
+            lastGifIndex = r.frame.index
+            let name = String(format: "frame_%05d.jpg", gifCount)
+            saveOverlayJPEG(r, to: gifDir.appendingPathComponent(name), vectorSeconds: args.double("vector-seconds", 0.5), width: gifWidth,
+                            privacy: privacy, lineScale: args.double("arrow-scale", 1))
+            gifCount += 1
+            let m = r.metrics
+            hud += String(format: "%@,%.3f,%d,%.6f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d\n", name, now - t0, r.frame.index, r.frame.presentationTime,
+                          m.sourceFPS ?? .nan, m.processingFPS ?? .nan, m.analysisDurationMs ?? .nan, m.receiveToResultMs ?? .nan,
+                          m.pivVectors, r.field?.cells.filter(\.valid).count ?? 0, r.particles.count)
+        }
+        if let r = restartAt, now - t0 >= r {
+            restartAt = nil
+            say("restarting the stream through another format…")
+            await source.restartStream()
+        }
         if let first = snaps.first, now - t0 >= first, let r = latest.value {
             snaps.removeFirst()
             saveOverlay(r, to: out.appendingPathComponent(String(format: "overlay_%02.0fs.png", now - t0)), vectorSeconds: 0.5)
@@ -419,6 +608,11 @@ func usbLive(_ args: Args) async -> Int32 {
     }
     if let r = latest.value { saveOverlay(r, to: out.appendingPathComponent("overlay_final.png"), vectorSeconds: 0.5) }
     await source.stopPreview()
+    if gifEvery != nil { try? hud.write(to: out.appendingPathComponent("hud.csv"), atomically: true, encoding: .utf8) }
+    if let streamWriter {
+        await streamWriter.finish()
+        say("   video:                \(args.options["save-video"]!) (\(streamWriter.written) frames written, \(streamWriter.dropped) dropped)")
+    }
     await pipeline.stop()
     let m = pipeline.metrics
     let result = await pipeline.finishRecording()
@@ -444,6 +638,7 @@ func usbLive(_ args: Args) async -> Int32 {
             say(String(format: "   Brownian: D = %.3g ± %.2g px²/s, noise %.3f px — %@", d.estimate.d, d.estimate.standardError,
                        d.estimate.localizationNoisePx ?? .nan, d.estimate.significant ? "resolved" : "not resolved"))
         }
+        if let cm = e.cameraMotion { say("   camera motion: \(cm.text)") }
         for w in e.warnings { say("   ! \(w)") }
         say("   report: \(folder?.appendingPathComponent("report.html").path ?? "-")")
     }
@@ -456,6 +651,7 @@ switch args.command {
 case "probe": code = await probe(args)
 case "benchmark": code = await benchmark(args)
 case "usb": code = await usbLive(args)
+case "file": code = await fileRun(args)
 default:
     say("usage: ace-probe [probe|benchmark] [options]  (see Sources/ace-probe/main.swift)")
     code = 64

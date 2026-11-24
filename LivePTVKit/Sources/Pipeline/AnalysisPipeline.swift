@@ -429,7 +429,11 @@ public final class AnalysisPipeline: @unchecked Sendable {
                         remeasure = { [unowned self] idx in
                             let ra = self.rawPrepared(partner, luma: nil, scale: pivScale, parameters: s.piv)
                             let rb = cur.map { self.rawPrepared($0, luma: lumaNow, scale: pivScale, parameters: s.piv) } ?? self.pivEngine.prepare(lumaNow)
-                            return self.pivEngine.measureWindows(a: ra, b: rb, field: rawField, indices: idx)
+                            // 🐱 one robust offset for all static windows: the median of their vectors (noise in a still
+                            // 🐱 scene averages out; a shaking camera moves them all alike)
+                            let mx = GridKernels.median(of: idx.map { rawField.dx[$0] }) ?? 0
+                            let my = GridKernels.median(of: idx.map { rawField.dy[$0] }) ?? 0
+                            return self.pivEngine.measureWindows(a: ra, b: rb, field: rawField, indices: idx, predictor: (mx, my))
                         }
                     }
                     lastShake = shakeCompensator.compensate(&field, pairSpacing: actualK, parameters: s.shake, remeasure: remeasure)
