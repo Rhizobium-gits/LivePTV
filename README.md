@@ -363,6 +363,27 @@ Exact particle positions (+0.05 px noise) in a Taylor–Green vortex array, 512 
 | 5000 | 8 px | 1.10 | 0.722 / 0.619 | 0.989 / 0.987 | 0.232 / 0.162 | 0.841 / 0.768 |
 | 5000 | 10 px | 1.38 | 0.321 / 0.206 | 0.979 / 0.970 | 0.150 / 0.099 | 0.771 / 0.672 |
 
+**What each part contributes** (the same datasets with one part of the tracker switched off; [`ptv_ablation.py`](benchmarks/python/ptv_ablation.py)):
+
+| tracker | mean over the 12 cases | 2000 particles, 10 px | 5000 particles, 10 px |
+| --- | --- | --- | --- |
+| LivePTV 0.8 (defaults) | 0.995 / 0.993 | 0.992 / 0.988 | 0.979 / 0.970 |
+| closest-first instead of global assignment | 0.983 / 0.980 | 0.969 / 0.961 | 0.916 / 0.893 |
+| no speed-dependent gate (factor 0) | 0.995 / 0.994 | 0.992 / 0.988 | 0.981 / 0.973 |
+| speed-dependent gate factor 0.3 | 0.994 / 0.993 | 0.992 / 0.989 | 0.975 / 0.968 |
+| no acceleration term | 0.995 / 0.993 | 0.993 / 0.986 | 0.978 / 0.961 |
+| neighbour prediction and first-frame vote off | 0.855 / 0.813 | 0.806 / 0.700 | 0.315 / 0.206 |
+
+The neighbour-consistency vote for tracks without a prediction and the global assignment make the difference; without the vote the tracker falls back to the 0.7 level. The speed-dependent gate does nothing within these cases; it is there for faster, sparser flows (separate datasets, search radius 24 px; gate factor 0 / 0.1 (default) / 0.3):
+
+| flow | factor 0 | factor 0.1 | factor 0.3 |
+| --- | --- | --- | --- |
+| 2000 particles, 12 px/frame | 0.986 / 0.975 | 0.987 / 0.978 | 0.988 / 0.978 |
+| 2000 particles, 16 px/frame | 0.689 / 0.446 | 0.811 / 0.644 | 0.888 / 0.798 |
+| 5000 particles, 12 px/frame | 0.933 / 0.889 | 0.942 / 0.906 | 0.807 / 0.720 |
+
+0.3 would help the sparse case more but costs the dense one.
+
 </details>
 
 <details>

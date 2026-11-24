@@ -184,10 +184,26 @@ def p2():
     g = lambda s: f"{s['precision']:.3f} / {s['recall']:.3f}" if "precision" in s else "–"
     rows = [[r["N"], f"{r['U']} px", f"{r['p_ratio']:.2f}", g(ro["LivePTV default (12 px, 4 px)"]), g(r["LivePTV default (12 px, 4 px)"]),
              g(r["trackpy (no predictor)"]), g(r["trackpy + velocity predictor"])] for r, ro in zip(d, o)]
+    ab, gate = load("ptv_ablation.json"), load("ptv_gate_fast.json")["results"]
+    arow = []
+    for name, rr in ab.items():
+        mp, mr = np.mean([r["precision"] for r in rr]), np.mean([r["recall"] for r in rr])
+        a = next(r for r in rr if r["N"] == 2000 and r["U"] == 10); b = next(r for r in rr if r["N"] == 5000 and r["U"] == 10)
+        arow.append([name, f"{mp:.3f} / {mr:.3f}", f"{a['precision']:.3f} / {a['recall']:.3f}", f"{b['precision']:.3f} / {b['recall']:.3f}"])
+    grow = [[k.replace("/", " particles, ") + " px/frame"] + [f"{v[a][0]:.3f} / {v[a][1]:.3f}" for a in ("0", "0.1", "0.3")] for k, v in gate.items()]
     body = ("Exact particle positions (+0.05 px noise) in a Taylor–Green vortex array, 512 × 512 px, 20 frames, 2 % of the "
             "particles replaced per frame (out-of-plane loss). Cells: precision / recall of frame-to-frame links; the search "
             "radius of trackpy is 1.5 U + 2 px.\n\n"
-            + table(["particles", "max displacement", "÷ mean spacing", "LivePTV 0.7", "LivePTV 0.8", "trackpy", "trackpy + predictor"], rows))
+            + table(["particles", "max displacement", "÷ mean spacing", "LivePTV 0.7", "LivePTV 0.8", "trackpy", "trackpy + predictor"], rows)
+            + "\n\n**What each part contributes** (the same datasets with one part of the tracker switched off; "
+              "[`ptv_ablation.py`](benchmarks/python/ptv_ablation.py)):\n\n"
+            + table(["tracker", "mean over the 12 cases", "2000 particles, 10 px", "5000 particles, 10 px"], arow)
+            + "\n\nThe neighbour-consistency vote for tracks without a prediction and the global assignment make the "
+              "difference; without the vote the tracker falls back to the 0.7 level. The speed-dependent gate does nothing "
+              "within these cases; it is there for faster, sparser flows (separate datasets, search radius 24 px; gate factor "
+              "0 / 0.1 (default) / 0.3):\n\n"
+            + table(["flow", "factor 0", "factor 0.1", "factor 0.3"], grow)
+            + "\n\n0.3 would help the sparse case more but costs the dense one.")
     return details("P2 · Particle tracking", "0.98 / 0.97 at 1.4 particle spacings per frame (0.7: 0.32 / 0.21, trackpy: 0.77 / 0.67)", body)
 
 

@@ -110,6 +110,12 @@ case "track":
     var tp = TrackerParameters()
     if let s = opt["maxdisp"] { tp.maxDisplacement = Double(s)! }
     if let s = opt["predrad"] { tp.predictionRadius = Double(s)! }
+    // ablation switches
+    if let s = opt["global"] { tp.globalAssignment = s == "1" }
+    if let s = opt["alpha"] { tp.speedRadiusFactor = Double(s)! }
+    if let s = opt["accel"] { tp.accelerationPrediction = s == "1" }
+    if let s = opt["nbpred"] { tp.neighborPrediction = s == "1" }
+    if let s = opt["nbcount"] { tp.neighborCount = Int(s)! }
     let tracker = ParticleTracker(parameters: tp)
     let rows = try! String(contentsOfFile: input, encoding: .utf8).split(separator: "\n").dropFirst()
     var byFrame: [Int: [(Double, Double)]] = [:]

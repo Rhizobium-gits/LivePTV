@@ -15,6 +15,7 @@ app pipeline. The numbers in `results/` are the ones quoted in the README.
 | `python/real_piv_compare.py` | OpenPIV's sample recordings (real images): LivePTV vs OpenPIV agreement and run time |
 | `python/real_brownian_trackpy.py`, `real_brownian_compare.py` | trackpy's `bulk_water` microscopy video: diffusion coefficient and Stokes–Einstein size, LivePTV (app pipeline) vs trackpy |
 | `python/synthetic_brownian_compare.py` | The same estimators on synthetic Brownian particles with known D |
+| `python/ptv_ablation.py` | What each part of the tracker contributes (P2 datasets, one part switched off at a time) |
 | `python/ptv_timing.py` | PTV speed: detection + tracking of ~20,000 particles per 1920 × 1080 frame, LivePTV vs trackpy |
 | `python/make_readme_figs.py` | The README figures (`docs/images`) |
 | `python/make_readme_tables.py` | The README's *Experiments* section, written from `results/` between its markers |
@@ -43,6 +44,7 @@ cd python
 ../.venv/bin/python piv_experiments.py e0 e1 e2 e3 e4 e5    # minutes
 ../.venv/bin/python piv_experiments.py e6                   # speed: run on an idle machine
 ../.venv/bin/python ptv_experiments.py p1 p2 p3
+../.venv/bin/python ptv_ablation.py && ../.venv/bin/python ptv_ablation.py gate
 ../.venv/bin/python real_piv_compare.py
 ../.venv/bin/python real_brownian_trackpy.py && ../.venv/bin/python real_brownian_compare.py
 ../.venv/bin/python synthetic_brownian_compare.py
