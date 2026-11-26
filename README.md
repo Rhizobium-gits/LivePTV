@@ -4,6 +4,8 @@
 ![Swift 5.10+](https://img.shields.io/badge/Swift-5.10%2B-orange)
 ![iPadOS 17 | macOS 14](https://img.shields.io/badge/platforms-iPadOS%2017%20%7C%20macOS%2014-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FRhizobium-gits%2FLivePTV%2Fstats%2Fstats.json&query=%24.total&label=downloads&style=flat&labelColor=0d0d10&color=26262c)](#downloads)
+[![via auralune.tech](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FRhizobium-gits%2FLivePTV%2Fstats%2Fstats.json&query=%24.site&label=via%20auralune.tech&style=flat&labelColor=0d0d10&color=e6c56b)](#downloads)
 
 **Real-time particle image velocimetry (PIV) and particle tracking (PTV) on an iPad, with the corrections a real
 experiment needs.** A camera looks at a bottle or a tank. LivePTV removes the glass reflections, glare and glints,
@@ -702,6 +704,12 @@ OpenPIV に同梱の実験画像（正解なし）では、2 つのツールの�
 - 演算の体系と検証の詳細: [docs/METHODS_ja.md](docs/METHODS_ja.md)
 - iPad へのインストール手順: [docs/INSTALL_XCODE_ja.md](docs/INSTALL_XCODE_ja.md)
 - 瓶で測る手順は、上の「Measuring a flow in a bottle」と同じです。
+
+## Downloads
+
+<a href="https://github.com/Rhizobium-gits/LivePTV/blob/stats/stats.json"><img src="https://raw.githubusercontent.com/Rhizobium-gits/LivePTV/stats/downloads-en.svg" width="820" alt="Running total of downloads and git clones, updated daily"></a>
+
+The running total is people who git-cloned this repository (GitHub's daily count; bots included) plus the source zips taken from [auralune.tech](https://auralune.tech/products/liveptv/) (GitHub does not count those, so they are added). "via auralune.tech" is how many times the download button there was pressed. `scripts/download-stats.py` recounts once a day (GitHub Actions, `.github/workflows/stats.yml`) and keeps the numbers on the [`stats` branch](https://github.com/Rhizobium-gits/LivePTV/tree/stats).
 
 ## Citation and license
 
