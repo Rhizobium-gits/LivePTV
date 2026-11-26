@@ -1,0 +1,30 @@
+{
+  "updated": "2026-11-26T14:27:39Z",
+  "product": "LivePTV",
+  "total": 89,
+  "release": 0,
+  "clone": 89,
+  "site": 0,
+  "site_source": 0,
+  "daily": {
+    "2026-11-26": {
+      "total": 89,
+      "release": 0,
+      "clone": 89,
+      "site": 0,
+      "site_source": 0,
+      "at": "2026-11-26T14:27:39Z"
+    }
+  },
+  "clones": {
+    "2026-11-24": {
+      "count": 91,
+      "uniques": 43
+    },
+    "2026-11-25": {
+      "count": 104,
+      "uniques": 46
+    }
+  },
+  "releases": []
+}
